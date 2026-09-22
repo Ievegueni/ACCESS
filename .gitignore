@@ -1,0 +1,14 @@
+build/
+.gradle/
+.kotlin/
+local.properties
+app/build/
+
+# Bases de dados: dados financeiros reais, nunca no repositório.
+server/*.db
+server/*.db-journal
+server/*.db-wal
+
+.DS_Store
+node_modules/
+.env

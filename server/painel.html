@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transferências</title>
+<link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+<header>
+  <h1>Transferências</h1>
+  <span class="quem" id="quem"></span>
+  <span class="links">
+    <a id="voltar" href="/admin" hidden>&larr; Clientes</a>
+    <a id="integracao" href="/programadores">Integração</a>
+    <a href="/sair">Sair</a>
+  </span>
+</header>
+
+<section class="painelTopo" aria-label="Resumo">
+  <div class="heroi">
+    <span class="etiqueta">Transferido com sucesso</span>
+    <b class="valor" id="heroiValor">&nbsp;</b>
+    <span class="sub" id="heroiSub"></span>
+  </div>
+  <div class="estatisticas" id="estatisticas"></div>
+</section>
+
+<form class="barra" id="filtros">
+  <label class="campo">
+    <span>Estado</span>
+    <select name="estado">
+      <option value="">Todos</option>
+      <option value="sucesso">Sucesso</option>
+      <option value="falha">A rever</option>
+    </select>
+  </label>
+  <label class="campo"><span>De</span><input type="date" name="de"></label>
+  <label class="campo"><span>Até</span><input type="date" name="ate"></label>
+  <button class="principal">Filtrar</button>
+  <button type="button" id="limpar">Limpar</button>
+</form>
+
+<div class="tabela">
+  <table>
+    <thead><tr>
+      <th>Momento</th>
+      <th class="num">Valor</th>
+      <th class="num">IBAN ·····</th>
+      <th>Estado</th>
+      <th id="cabecalhoTelemovel">Telemóvel</th>
+      <th>TID</th>
+      <th>Recebido</th>
+    </tr></thead>
+    <tbody id="linhas"></tbody>
+  </table>
+  <p class="vazio" id="vazio" hidden>Sem transferências no período.</p>
+</div>
+
+<script src="/painel.js"></script>
+<script>
+// Um cliente vê só o seu; o admin chega aqui com ?cliente=<id> a partir de /admin.
+const clienteId = new URLSearchParams(location.search).get('cliente');
+voltar.hidden = !clienteId;   // só quem veio da lista precisa do caminho de volta
+if (clienteId) integracao.href = '/programadores?cliente=' + encodeURIComponent(clienteId);
+
+async function carregar() {
+  const params = new URLSearchParams([...new FormData(filtros)].filter(([, v]) => v));
+  if (clienteId) params.set('cliente', clienteId);
+  const r = await fetch('/api/transferencias?' + params);
+  if (r.status === 401) return location.assign('/');   // sessão caiu
+  const d = await r.json();
+
+  quem.textContent = d.cliente;
+  document.title = `${d.cliente} · Transferências`;
+
+  // Uma métrica manda, as outras acompanham: seis cartões iguais não dizem por
+  // onde começar a olhar.
+  heroiValor.innerHTML = montante(d.total.v);
+  heroiSub.textContent = `${d.total.n} ${d.total.n === 1 ? 'transferência' : 'transferências'}`
+    + (d.rever ? ` · ${d.rever} a rever` : '');
+
+  const saude = cartaoSaude(d.saude, d.criado_em);
+  estatisticas.innerHTML =
+    estatistica('Últimas 24 h', montante(d.dia.v))
+    + estatistica('Últimos 30 dias', montante(d.mes.v))
+    + estatistica('A rever', d.rever, d.rever ? 'alerta' : '')
+    + estatistica('Sem receber há', saude.texto, saude.classe);
+
+  // A coluna do telemóvel só diz alguma coisa quando há mais do que um: com um
+  // telemóvel só, repete o mesmo número em todas as linhas.
+  const distintos = new Set(d.itens.map(t => t.numero_origem ?? '')).size;
+  const mostrarTelemovel = distintos > 1 || d.itens.some(t => t.atribuido_por !== 'numero');
+  cabecalhoTelemovel.hidden = !mostrarTelemovel;
+
+  linhas.innerHTML = d.itens.map(t => `<tr>
+      <td>${data(t.momento)}</td>
+      <td class="num dinheiro">${montante(t.valor, t.valor_texto)}</td>
+      <td class="num numero">${esc(t.iban_ultimos5 ?? '—')}</td>
+      <td>${pillEstado(t.estado)}</td>
+      ${mostrarTelemovel
+        ? `<td class="numero">${esc(t.numero_origem ?? '—')}${marcaOrigem(t.atribuido_por)}</td>`
+        : ''}
+      <td class="tid">${esc(t.tid)}</td>
+      <td class="quando">${data(t.recebido_em)}</td>
+    </tr>`).join('');
+  vazio.hidden = d.itens.length > 0;
+}
+
+const pillEstado = (estado) => estado === 'falha'
+  ? '<span class="pill aviso"><i></i>a rever</span>'
+  : '<span class="pill"><i></i>sucesso</span>';
+
+/**
+ * Como se soube de quem era esta transferência. Só se marca o que não é o caso
+ * normal: um telemóvel registado não precisa de explicação.
+ */
+function marcaOrigem(por) {
+  if (por === 'numero') return '';
+  if (por === 'manual') return ' <span class="marca" title="movida à mão pelo administrador">à mão</span>';
+  return ' <span class="marca" title="telemóvel não registado — atribuída pelo token">por token</span>';
+}
+
+filtros.onsubmit = e => { e.preventDefault(); carregar(); };
+limpar.onclick = () => { filtros.reset(); carregar(); };
+carregar();
+setInterval(carregar, 60000);
+</script>
+</body>
+</html>

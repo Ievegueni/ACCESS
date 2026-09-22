@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clientes</title>
+<link rel="stylesheet" href="/estilo.css">
+</head>
+<body>
+<header>
+  <h1>Clientes</h1>
+  <span class="quem">administração</span>
+  <span class="links"><a href="/sair">Sair</a></span>
+</header>
+
+<!-- O URL não é segredo e é igual para todos os clientes: fica sempre visível,
+     para ninguém ter de carregar em "Novo token" só para o ir ver. -->
+<p class="endpoint">
+  Webhook da app · <code id="endpoint"></code>
+  <span id="semTls" class="falha" hidden>— a app só aceita https://</span>
+</p>
+
+<section class="painelTopo" aria-label="Resumo">
+  <div class="heroi">
+    <span class="etiqueta">Transferido com sucesso</span>
+    <b class="valor" id="heroiValor">&nbsp;</b>
+    <span class="sub" id="heroiSub"></span>
+  </div>
+  <div class="estatisticas" id="estatisticas"></div>
+</section>
+
+<div id="segredo"></div>
+
+<div class="tabela">
+  <table>
+    <thead><tr>
+      <th>Cliente</th>
+      <th>Telemóveis</th>
+      <th>Integração</th>
+      <th class="num">Transferido</th>
+      <th class="num">Últimas 24 h</th>
+      <th class="num">Nº ok</th>
+      <th class="num">A rever</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="linhas"></tbody>
+  </table>
+</div>
+
+<section id="secaoPorAtribuir" hidden>
+  <h2 style="margin-top: 1.75rem">Por atribuir</h2>
+  <p class="nota">
+    Vieram de telemóveis que não estão registados em ninguém. Ficaram com o dono do
+    token para não se perderem — escolhe de quem são.
+  </p>
+  <div class="tabela">
+    <table>
+      <thead><tr>
+        <th>Momento</th><th>Telemóvel</th>
+        <th class="num">Valor</th><th class="num">IBAN ·····</th>
+        <th>Está em</th><th>Passar para</th>
+      </tr></thead>
+      <tbody id="linhasPorAtribuir"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="painel" style="margin-top: 1.75rem">
+  <h2>Novo cliente</h2>
+  <form id="novo">
+    <input name="nome" placeholder="Nome" required>
+    <input name="senha" type="password" placeholder="Senha (mín. 8)" minlength="8" required>
+    <input name="numero" type="tel" placeholder="Número do telemóvel" autocomplete="off">
+    <button class="principal">Criar</button>
+  </form>
+</section>
+
+<script src="/painel.js"></script>
+<script>
+const URL_WEBHOOK = location.origin + '/webhooks/transferencias';
+endpoint.textContent = URL_WEBHOOK;
+semTls.hidden = location.protocol === 'https:';
+
+async function api(corpo) {
+  const r = await fetch('/api/clientes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpo),
+  });
+  const d = await r.json();
+  if (!r.ok) { alert(d.erro); return null; }
+  return d;
+}
+
+// O token só existe em claro neste momento — no servidor fica só o hash.
+function mostrarToken(nome, token, numero) {
+  segredo.innerHTML = `<div class="configuracao">
+    <b>Configuração da app de ${esc(nome)}</b> — o token não volta a ser mostrado.
+    Colar no ecrã "Painel (webhook)" da app, no telemóvel do cliente:
+    <dl>
+      <dt>URL do endpoint</dt><dd><code>${esc(URL_WEBHOOK)}</code></dd>
+      <dt>Token</dt><dd><code>${esc(token)}</code></dd>
+      ${numero ? `<dt>Número deste telemóvel</dt><dd><code>${esc(numero)}</code></dd>` : ''}
+    </dl>
+    ${numero ? '' : '<b>Sem telemóvel registado:</b> as transferências ficam por atribuir '
+      + 'até juntares o número no menu do cliente.'}
+  </div>`;
+  segredo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/** Lista as transferências que chegaram de telemóveis que ninguém reclamou. */
+async function carregarPorAtribuir(reais) {
+  const { itens } = await (await fetch('/api/por-atribuir')).json();
+  secaoPorAtribuir.hidden = itens.length === 0;
+  if (!itens.length) return;
+
+  const opcoes = reais.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+  linhasPorAtribuir.innerHTML = itens.map(t => `<tr>
+      <td>${data(t.momento)}</td>
+      <td class="numero">${esc(t.numero_origem)}</td>
+      <td class="num dinheiro">${montante(t.valor, t.valor_texto)}</td>
+      <td class="num">${esc(t.iban_ultimos5 ?? '—')}</td>
+      <td class="estado inativo"><i class="ponto"></i>${esc(t.cliente)}</td>
+      <td>
+        <select data-tid="${esc(t.tid)}">
+          <option value="">escolher…</option>${opcoes}
+        </select>
+      </td>
+    </tr>`).join('');
+}
+
+// Atribuir e, de caminho, registar o telemóvel: sem isso repetia-se isto a cada
+// transferência que chegasse do mesmo sítio.
+linhasPorAtribuir.onchange = async (e) => {
+  const sel = e.target.closest('select');
+  if (!sel?.value) return;
+  const nome = sel.selectedOptions[0].textContent;
+  const registarNumero = confirm(
+    `Passar esta transferência para ${nome}.\n\n`
+    + 'OK: registar também o telemóvel, e as outras que vieram dele seguem juntas.\n'
+    + 'Cancelar: mover só esta.');
+
+  const r = await fetch('/api/por-atribuir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tid: sel.dataset.tid, cliente: sel.value, registarNumero }),
+  });
+  const d = await r.json();
+  if (!r.ok) alert(d.erro);
+  else if (d.movidas > 1) alert(`${d.movidas} transferências passaram para ${d.cliente}.`);
+  carregar();
+};
+
+async function carregar() {
+  const r = await fetch('/api/clientes');
+  if (r.status === 401) return location.assign('/');
+  const { clientes } = await r.json();
+  const reais = clientes.filter(c => !c.admin);
+  carregarPorAtribuir(reais);
+
+  const soma = (f) => reais.reduce((t, c) => t + f(c), 0);
+  const calado = reais.filter(c => gravidade(c.saude, c.criado_em) === 'grave').length;
+  const rever = soma(c => c.rever);
+  const ativos = reais.filter(c => c.ativo).length;
+
+  heroiValor.innerHTML = kz(soma(c => c.total.v));
+  heroiSub.textContent = `${ativos} de ${reais.length} ${reais.length === 1 ? 'cliente ativo' : 'clientes ativos'}`;
+
+  estatisticas.innerHTML =
+    estatistica('Últimas 24 h', kz(soma(c => c.dia.v)))
+    + estatistica('Nº com sucesso', soma(c => c.total.n))
+    + estatistica('A rever', rever, rever ? 'alerta' : '')
+    // um cliente calado é uma app parada: é aqui que se vê sem abrir cliente a cliente
+    + estatistica('Sem dar sinal', calado, calado ? 'grave' : '');
+
+  linhas.innerHTML = reais.map(c => `<tr class="${c.ativo ? '' : 'inativo'}">
+      <td>
+        <a class="nome" href="/?cliente=${c.id}">${esc(c.nome)}</a>
+        <div class="estado ${estadoDe(c).classe}"><i class="ponto"></i>${estadoDe(c).texto}</div>
+      </td>
+      <td>${c.numeros.length
+        ? c.numeros.map(n => `<div class="numero">${esc(n.bruto)}</div>`).join('')
+        : '<span class="pill grave"><i></i>sem telemóvel</span>'}</td>
+      <td>${integracaoDe(c)}</td>
+      <td class="num dinheiro">${kz(c.total.v)}</td>
+      <td class="num">${kz(c.dia.v)}</td>
+      <td class="num">${c.total.n}</td>
+      <td class="num">${c.rever ? `<span class="pill aviso"><i></i>${c.rever}</span>` : '—'}</td>
+      <td class="accoes">
+        <button class="mais" data-menu="m${c.id}" aria-label="Acções de ${esc(c.nome)}">⋯</button>
+        <div class="menu" popover id="m${c.id}">
+          <button data-accao="formato" data-id="${c.id}" data-nome="${esc(c.nome)}"
+                  data-formato="${esc(c.formato_sms ?? '')}">Formato do SMS de pedido</button>
+          <button data-accao="integracao" data-id="${c.id}">Ver página de integração</button>
+          <button data-accao="numero" data-id="${c.id}" data-nome="${esc(c.nome)}">Juntar telemóvel</button>
+          ${c.numeros.map(n => `<button data-accao="tirarNumero" data-id="${c.id}"
+              data-numero="${esc(n.numero)}" data-nome="${esc(n.bruto)}">Tirar ${esc(n.bruto)}</button>`).join('')}
+          <button data-accao="token" data-id="${c.id}" data-nome="${esc(c.nome)}">Gerar novo token</button>
+          <button data-accao="senha" data-id="${c.id}" data-nome="${esc(c.nome)}">Mudar a senha</button>
+          <button data-accao="renomear" data-id="${c.id}" data-nome="${esc(c.nome)}">Renomear</button>
+          <button data-accao="estado" data-id="${c.id}" data-ativo="${c.ativo}">${c.ativo ? 'Desativar' : 'Ativar'}</button>
+          <button class="perigo" data-accao="remover" data-id="${c.id}" data-nome="${esc(c.nome)}">Remover</button>
+        </div>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="8" class="vazio">Ainda não há clientes.</td></tr>';
+}
+
+/**
+ * O que falta para o programador do cliente poder trabalhar. As duas peças são
+ * independentes: sem formato não sabe o que enviar, sem chave não lê o resultado.
+ */
+function integracaoDe(c) {
+  const falta = [];
+  if (!c.formato_sms) falta.push('formato');
+  if (!c.tem_chave) falta.push('chave');
+  return falta.length
+    ? `<span class="pill aviso"><i></i>falta ${falta.join(' e ')}</span>`
+    : '<span class="pill"><i></i>pronta</span>';
+}
+
+/** Uma linha de estado por cliente, em vez de três colunas quase sempre iguais. */
+function estadoDe(c) {
+  if (!c.ativo) return { classe: 'inativo', texto: 'desativado · a app acumula em fila' };
+  const classe = gravidade(c.saude, c.criado_em);
+  if (c.saude.silencio_ms == null) {
+    return { classe, texto: classe ? 'nunca enviou nada' : 'à espera do primeiro envio' };
+  }
+  const quando = duracao(c.saude.silencio_ms);
+  // duracao() já devolve "agora mesmo"; "recebido há agora mesmo" não se diz.
+  return { classe, texto: quando === 'agora mesmo' ? 'recebido agora mesmo' : `recebido há ${quando}` };
+}
+
+// O popover vive na top layer, por isso não é cortado pelo overflow da tabela —
+// mas também não herda a posição do botão: alinha-se à mão antes de abrir. Fechar
+// ao clicar fora e com Esc já vem de borla.
+function abrirMenu(botao) {
+  const menu = document.getElementById(botao.dataset.menu);
+  menu.showPopover();
+  const r = botao.getBoundingClientRect();
+  menu.style.left = `${r.right + scrollX - menu.offsetWidth}px`;
+  menu.style.top = `${r.bottom + scrollY + 4}px`;
+}
+
+linhas.onclick = async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  // Sem isto, o mesmo clique chega ao document e o light dismiss fecha o menu.
+  if (b.dataset.menu) { e.stopPropagation(); return abrirMenu(b); }
+  const { accao, id, nome, ativo } = b.dataset;
+
+  if (accao === 'token') {
+    // O token antigo passa a dar 401, que a app trata como definitivo: descarta a fila.
+    if (!confirm(`Gerar um token novo para ${nome}?\n\nO atual deixa de funcionar e a app `
+      + `descarta o que tiver por entregar. Para suspender sem perder nada, usa "Desativar".`)) return;
+    const d = await api({ accao, id });
+    if (d) mostrarToken(nome, d.token, d.numero);
+  } else if (accao === 'integracao') {
+    return location.assign('/programadores?cliente=' + id);
+  } else if (accao === 'formato') {
+    // O que se escreve aqui é o que o programador do cliente vê e copia, por isso
+    // tem de ser exatamente o que a sequência do telemóvel dele espera.
+    const formato = prompt(
+      `Exemplo do SMS de pedido de ${nome}.\n\n`
+      + 'Tem de conter o texto de disparo e os campos que a sequência do telemóvel espera,\n'
+      + 'e acabar no último valor. Ex.: levantar iban: AO06...219 valor: 5000',
+      b.dataset.formato);
+    if (formato !== null) await api({ accao, id, formato });
+  } else if (accao === 'numero') {
+    const numero = prompt(`Número do telemóvel que vai trabalhar para ${nome}:\n\n`
+      + 'É o mesmo que se escreve no campo "Número deste telemóvel" da app.');
+    if (numero) await api({ accao, id, numero });
+  } else if (accao === 'tirarNumero') {
+    // As transferências que já chegaram por este número ficam onde estão.
+    if (!confirm(`Deixar de reconhecer ${nome}?\n\nAs transferências já atribuídas não mudam.`)) return;
+    await api({ accao, id, numero: b.dataset.numero });
+  } else if (accao === 'senha') {
+    const senha = prompt(`Nova senha para ${nome} (mín. 8 caracteres):`);
+    if (senha && await api({ accao, id, senha })) alert(`Senha alterada. ${nome} terá de entrar de novo.`);
+  } else if (accao === 'renomear') {
+    const novoNome = prompt(`Novo nome para ${nome}?\n\nÉ também o utilizador do login — avisa o cliente.`, nome);
+    if (novoNome && novoNome !== nome) await api({ accao, id, nome: novoNome });
+  } else if (accao === 'estado') {
+    // Desativar fecha a sessão; o webhook passa a 503 e a app acumula em fila.
+    await api({ accao, id, ativo: ativo !== 'true' && ativo !== '1' });
+  } else if (accao === 'remover') {
+    // O servidor recusa se houver histórico — aqui só se confirma a intenção.
+    if (!confirm(`Remover ${nome} definitivamente?`)) return;
+    await api({ accao, id });
+  }
+  carregar();
+};
+
+novo.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(novo));
+  const d = await api({ accao: 'criar', ...f });
+  if (d) { mostrarToken(d.nome, d.token, d.numero); novo.reset(); }
+  carregar();
+};
+
+carregar();
+// Não recarregar por baixo de um menu aberto: a lista é reconstruída e fecha-o.
+setInterval(() => { if (!document.querySelector('.menu:popover-open')) carregar(); }, 60000);
+</script>
+</body>
+</html>

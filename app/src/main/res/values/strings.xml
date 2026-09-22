@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Access</string>
+    <string name="accessibility_description">Localiza e clica automaticamente em botões nas apps que definires. Nenhum conteúdo do ecrã sai do dispositivo.</string>
+</resources>

@@ -1,0 +1,370 @@
+/* Painel de transferências — sistema visual.
+   Sem dependências nem tipos externos: isto corre em rede privada e atrás de um
+   túnel, e uma folha de estilo que espera por fonts.googleapis.com fica em branco. */
+
+:root {
+  color-scheme: light dark;
+
+  --texto: #0f172a;
+  --suave: #475569;          /* mínimo legível sobre --fundo: 7.4:1 */
+  --ténue: #64748b;
+  --fundo: #fbfcfd;
+  --superficie: #ffffff;
+  --linha: #e2e8f0;
+  --linha-forte: #cbd5e1;
+  --marca: #1d4ed8;
+  --ok: #15803d;
+  --ok-fundo: #dcfce7;
+  --aviso: #b45309;
+  --aviso-fundo: #fef3c7;
+  --grave: #b91c1c;
+  --grave-fundo: #fee2e2;
+  --sombra: 0 1px 2px rgb(15 23 42 / .04), 0 1px 3px rgb(15 23 42 / .06);
+  --sombra-alta: 0 10px 30px rgb(15 23 42 / .12);
+
+  --raio: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* O tema do sistema é o sinal por omissão; data-theme sobrepõe-se nos dois sentidos. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --texto: #f1f5f9;
+    --suave: #a3b0c2;
+    --ténue: #8595aa;
+    --fundo: #0b1120;
+    --superficie: #151d2e;
+    --linha: #26334a;
+    --linha-forte: #3a4a66;
+    --marca: #93b4fd;
+    --ok: #5ee08a;
+    --ok-fundo: #10331f;
+    --aviso: #fcc44d;
+    --aviso-fundo: #3a2a06;
+    --grave: #ff8b8b;
+    --grave-fundo: #3d1414;
+    --sombra: 0 1px 2px rgb(0 0 0 / .4);
+    --sombra-alta: 0 12px 34px rgb(0 0 0 / .5);
+  }
+}
+:root[data-theme="dark"] {
+  --texto: #f1f5f9; --suave: #a3b0c2; --ténue: #8595aa;
+  --fundo: #0b1120; --superficie: #151d2e;
+  --linha: #26334a; --linha-forte: #3a4a66; --marca: #93b4fd;
+  --ok: #5ee08a; --ok-fundo: #10331f;
+  --aviso: #fcc44d; --aviso-fundo: #3a2a06;
+  --grave: #ff8b8b; --grave-fundo: #3d1414;
+  --sombra: 0 1px 2px rgb(0 0 0 / .4);
+  --sombra-alta: 0 12px 34px rgb(0 0 0 / .5);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font: 400 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--texto);
+  background: var(--fundo);
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+  max-width: 1180px;
+  -webkit-font-smoothing: antialiased;
+}
+
+:where(a, button, select, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--marca);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- cabeçalho ----------------------------------------------------------- */
+
+header { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.75rem; }
+h1 { font-size: 1.4rem; font-weight: 650; letter-spacing: -.02em; margin: 0; }
+h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .07em;
+     color: var(--ténue); font-weight: 600; margin: 0 0 .85rem; }
+.quem {
+  font-size: .82rem; color: var(--suave); font-weight: 500;
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: 99px; padding: .15rem .7rem;
+}
+header .links { margin-left: auto; display: flex; align-items: center; gap: .35rem; }
+header a {
+  font-size: .85rem; color: var(--suave); text-decoration: none; font-weight: 500;
+  /* 44px de alvo de toque sem engordar a linha do cabeçalho */
+  padding: .6rem .7rem; border-radius: 8px;
+  transition: background-color .18s ease, color .18s ease;
+}
+header a:hover { background: var(--superficie); color: var(--texto); }
+
+/* --- métrica principal + secundárias ------------------------------------- */
+
+.painelTopo {
+  display: grid; grid-template-columns: minmax(230px, 1fr) 2fr;
+  gap: 1px; background: var(--linha);
+  border: 1px solid var(--linha); border-radius: var(--raio);
+  box-shadow: var(--sombra); overflow: hidden; margin-bottom: 1.5rem;
+}
+.heroi { background: var(--superficie); padding: 1.35rem 1.5rem; }
+.heroi .etiqueta { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--ténue); font-weight: 600; }
+.heroi .valor {
+  display: block; margin-top: .35rem;
+  font-size: clamp(1.75rem, 1.2rem + 1.8vw, 2.4rem); font-weight: 650;
+  letter-spacing: -.035em; font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+/* A moeda esbatida e destacada do número, em qualquer sítio onde apareça. */
+.moeda { font-weight: 400; color: var(--ténue); font-size: .85em;
+  letter-spacing: 0; margin-left: .25rem; }
+.heroi .valor .moeda { font-size: .48em; font-weight: 600; margin-left: .3rem; }
+.heroi .sub { display: block; margin-top: .45rem; font-size: .85rem; color: var(--suave); }
+
+.estatisticas {
+  background: var(--superficie);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 1px 0;
+}
+.estatistica { padding: 1.35rem 1.25rem; border-left: 1px solid var(--linha); }
+.estatistica:first-child { border-left: 0; }
+.estatistica .etiqueta { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ténue); font-weight: 600; display: block; }
+.estatistica .valor { display: block; margin-top: .3rem; font-size: 1.3rem; font-weight: 600;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.estatistica.alerta .valor { color: var(--aviso); }
+.estatistica.grave .valor { color: var(--grave); }
+
+/* --- barra de filtros ---------------------------------------------------- */
+
+.barra {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: .7rem;
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); padding: .85rem 1rem; margin-bottom: 1.1rem;
+  box-shadow: var(--sombra);
+}
+.campo { display: flex; flex-direction: column; gap: .3rem; }
+.campo > span { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ténue); font-weight: 600; }
+
+input, select, button {
+  font: inherit; font-size: .9rem; color: var(--texto);
+  background: var(--superficie); border: 1px solid var(--linha-forte);
+  border-radius: 8px; padding: .5rem .65rem; min-height: 40px;
+}
+input:hover, select:hover { border-color: var(--ténue); }
+button { cursor: pointer; font-weight: 500; transition: background-color .18s ease, border-color .18s ease; }
+button:hover { background: var(--fundo); border-color: var(--ténue); }
+button.principal { background: var(--marca); border-color: var(--marca); color: #fff; }
+:root[data-theme="dark"] button.principal,
+:where(:root:not([data-theme="light"])) button.principal { color: #0b1120; }
+button.principal:hover { filter: brightness(1.08); background: var(--marca); }
+.espaco { margin-left: auto; }
+
+/* --- tabelas ------------------------------------------------------------- */
+
+.tabela {
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); box-shadow: var(--sombra);
+  overflow-x: auto;                 /* tabela larga rola dentro de si, não na página */
+}
+table { border-collapse: collapse; width: 100%; }
+thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--superficie);
+  text-align: left; white-space: nowrap;
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--ténue); font-weight: 600;
+  padding: .8rem 1rem; border-bottom: 1px solid var(--linha);
+}
+tbody td { padding: .8rem 1rem; white-space: nowrap; border-top: 1px solid var(--linha); font-size: .92rem; }
+tbody tr:first-child td { border-top: 0; }
+tbody tr { transition: background-color .15s ease; }
+tbody tr:hover { background: color-mix(in srgb, var(--marca) 5%, transparent); }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.dinheiro { font-weight: 600; letter-spacing: -.01em; }
+tr.inativo td:not(.accoes) { color: var(--ténue); }
+.tid, .numero { font-family: var(--mono); font-size: .82rem; color: var(--suave); }
+.numero { font-size: .85rem; }
+.quando { color: var(--suave); }
+.vazio { padding: 3.5rem 1rem; text-align: center; color: var(--ténue); }
+.nota { font-size: .87rem; color: var(--suave); margin: 0 0 .9rem; max-width: 68ch; }
+
+/* --- pills de estado ----------------------------------------------------- */
+
+.pill {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .78rem; font-weight: 600; line-height: 1;
+  padding: .3rem .55rem .3rem .45rem; border-radius: 99px;
+  background: var(--ok-fundo); color: var(--ok);
+}
+.pill.aviso { background: var(--aviso-fundo); color: var(--aviso); }
+.pill.grave { background: var(--grave-fundo); color: var(--grave); }
+/* O ponto reforça o estado para quem não distingue as cores (a cor não é o único sinal). */
+.pill i { width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; flex: none; }
+
+.marca {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
+  border: 1px solid var(--linha-forte); border-radius: 4px;
+  padding: .05rem .3rem; color: var(--ténue); margin-left: .4rem; white-space: nowrap;
+}
+
+/* nome + estado numa célula, em vez de três colunas quase sempre iguais */
+.nome { font-weight: 550; color: inherit; text-decoration: none; }
+.nome:hover { color: var(--marca); text-decoration: underline; }
+.estado { display: flex; align-items: center; gap: .4rem; font-size: .8rem;
+  color: var(--suave); margin-top: .2rem; }
+.estado.alerta { color: var(--aviso); }
+.estado.grave { color: var(--grave); }
+.ponto { width: .45rem; height: .45rem; border-radius: 50%; background: var(--ok); flex: none; }
+.estado.alerta .ponto { background: var(--aviso); }
+.estado.grave .ponto { background: var(--grave); }
+.estado.inativo { color: var(--ténue); }
+.estado.inativo .ponto { background: var(--ténue); }
+
+/* --- menu de acções: popover nativo (top layer, não é cortado pela tabela) - */
+
+td.accoes { text-align: right; width: 1%; }
+button.mais {
+  border: 0; background: transparent; color: var(--ténue);
+  min-height: 36px; padding: .25rem .6rem; line-height: 1; letter-spacing: .1em;
+}
+button.mais:hover { background: var(--fundo); color: var(--texto); }
+.menu[popover] {
+  position: absolute; margin: 0; inset: auto; min-width: 12rem; padding: .35rem;
+  border: 1px solid var(--linha); border-radius: var(--raio);
+  background: var(--superficie); color: var(--texto);
+  box-shadow: var(--sombra-alta); overflow: visible;
+}
+/* `display` tem de ficar aqui: em .menu[popover] anularia o display:none que o
+   browser aplica a um popover fechado, e os menus ficavam todos visíveis. */
+.menu:popover-open { display: flex; flex-direction: column; }
+.menu button {
+  border: 0; background: transparent; text-align: left;
+  padding: .55rem .6rem; border-radius: 7px; font-size: .88rem; min-height: 40px;
+}
+.menu button:hover { background: var(--fundo); }
+.menu button.perigo { color: var(--grave); }
+
+/* --- endpoint e faixa de configuração ------------------------------------ */
+
+.endpoint { font-size: .85rem; color: var(--suave); margin: -1rem 0 1.5rem; }
+.endpoint code { font-family: var(--mono); font-size: .88em; user-select: all; }
+.endpoint .falha { color: var(--aviso); font-weight: 600; }
+
+/* `.configuracao`, não `.aviso`: `aviso` é o modificador de estado dos pills e
+   das estatísticas, e o padding desta faixa engordava-os a todos. */
+.configuracao {
+  border: 1px solid color-mix(in srgb, var(--aviso) 40%, transparent);
+  background: var(--aviso-fundo); color: var(--texto);
+  border-radius: var(--raio); padding: 1rem 1.15rem; margin-bottom: 1.5rem;
+}
+.configuracao b { color: var(--aviso); }
+.configuracao code { font-family: var(--mono); font-size: .86rem; user-select: all; word-break: break-all; }
+.configuracao dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem; margin: .7rem 0 0; }
+.configuracao dt { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--suave); font-weight: 600; padding-top: .2rem; }
+.configuracao dd { margin: 0; }
+
+.painel {
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); padding: 1.1rem 1.2rem; box-shadow: var(--sombra);
+}
+
+/* --- página de integração ------------------------------------------------ */
+
+.doc { max-width: 900px; }
+.doc section { margin-top: 2.75rem; scroll-margin-top: 1rem; }
+.doc h2 { font-size: 1.05rem; text-transform: none; letter-spacing: -.01em;
+  color: var(--texto); padding-bottom: .6rem; border-bottom: 1px solid var(--linha); }
+.doc h3 { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--ténue); font-weight: 600; margin: 1.75rem 0 .7rem; }
+
+.indice { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .5rem; }
+.indice a {
+  font-size: .82rem; font-weight: 500; text-decoration: none; color: var(--suave);
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: 99px; padding: .35rem .8rem;
+  transition: border-color .18s ease, color .18s ease;
+}
+.indice a:hover { color: var(--texto); border-color: var(--linha-forte); }
+
+/* os quatro passos do fluxo */
+.passos { display: grid; gap: .6rem; }
+.passo {
+  display: flex; gap: .85rem; align-items: flex-start;
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); padding: .85rem 1rem;
+}
+.passo .ordem {
+  flex: none; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+  display: grid; place-items: center; font-size: .78rem; font-weight: 650;
+  background: color-mix(in srgb, var(--marca) 12%, transparent); color: var(--marca);
+}
+.passo b { font-size: .95rem; }
+.passo p { margin: .15rem 0 0; font-size: .87rem; color: var(--suave); }
+
+/* uma regra, com variante para as que partem a integração em silêncio */
+.regra {
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-left: 3px solid var(--linha-forte);
+  border-radius: var(--raio); padding: .9rem 1.05rem; margin: .7rem 0;
+}
+.regra.perigo { border-left-color: var(--aviso); }
+.regra > b { font-size: .95rem; }
+.regra p { margin: .3rem 0 0; font-size: .89rem; color: var(--suave); }
+
+.par { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: .6rem; margin-top: .8rem; }
+.par > div { border: 1px solid var(--linha); border-radius: 8px; padding: .7rem .8rem; }
+.par .mau { border-color: color-mix(in srgb, var(--grave) 35%, transparent); }
+.par .bom { border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.etiquetaExemplo { display: block; font-size: .66rem; text-transform: uppercase;
+  letter-spacing: .07em; font-weight: 650; margin-bottom: .4rem; }
+.par .mau .etiquetaExemplo { color: var(--grave); }
+.par .bom .etiquetaExemplo { color: var(--ok); }
+.par code { display: block; font-family: var(--mono); font-size: .8rem; line-height: 1.5; }
+.par .mau code b { background: color-mix(in srgb, var(--grave) 22%, transparent); }
+.par p { margin: .45rem 0 0; font-size: .8rem; color: var(--suave); }
+
+pre {
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); padding: .9rem 1.05rem; margin: 0 0 .5rem;
+  overflow-x: auto;
+}
+pre code { font-family: var(--mono); font-size: .82rem; line-height: 1.6;
+  white-space: pre; color: var(--texto); }
+:not(pre) > code { font-family: var(--mono); font-size: .88em;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  border-radius: 4px; padding: .05em .3em; }
+
+.destinos { display: flex; flex-wrap: wrap; gap: .5rem; }
+.destino {
+  font-family: var(--mono); font-size: 1.02rem; font-weight: 500; user-select: all;
+  background: var(--superficie); border: 1px solid var(--linha-forte);
+  border-radius: 8px; padding: .55rem .85rem;
+}
+
+.parametros { border: 1px solid var(--linha); border-radius: var(--raio);
+  overflow: hidden; margin-top: .5rem; }
+.parametros th { background: var(--superficie); position: static; }
+.parametros td { font-size: .88rem; white-space: normal; }
+.parametros td:first-child, .parametros td:nth-child(2) { white-space: nowrap; }
+
+.miudezas { margin: 0; padding-left: 1.1rem; color: var(--suave); font-size: .89rem; }
+.miudezas li { margin-bottom: .3rem; }
+
+/* --- responsivo ---------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  .painelTopo { grid-template-columns: 1fr; }
+  .estatistica { border-left: 0; border-top: 1px solid var(--linha); }
+  .estatistica:first-child { border-top: 1px solid var(--linha); }
+}
+@media (max-width: 560px) {
+  body { padding: 1.5rem 1rem 3rem; }
+  .barra { padding: .75rem .8rem; }
+  .campo, .campo select, .campo input { width: 100%; }
+  .espaco { margin-left: 0; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}

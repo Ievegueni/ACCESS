@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de transferências</title>
+<link rel="stylesheet" href="/estilo.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 1.5rem; }
+  .entrada { width: min(21rem, 100%); }
+  .entrada h1 { font-size: 1.25rem; margin-bottom: .3rem; }
+  .entrada p.nota { margin-bottom: 1.4rem; }
+  .entrada form { display: grid; gap: .9rem; }
+  .entrada button { min-height: 44px; }
+  .erro {
+    display: flex; align-items: center; gap: .5rem;
+    background: var(--grave-fundo); color: var(--grave);
+    border-radius: 8px; padding: .6rem .75rem; margin: 0 0 1rem;
+    font-size: .87rem; font-weight: 500;
+  }
+</style>
+</head>
+<body>
+<main class="entrada">
+  <h1>Painel de transferências</h1>
+  <p class="nota">Entra com o nome do cliente e a senha que te foi dada.</p>
+  <!--erro-->
+  <form method="post" action="/entrar" class="painel">
+    <label class="campo">
+      <span>Cliente</span>
+      <input name="cliente" autocomplete="username" autocapitalize="off" autofocus required>
+    </label>
+    <label class="campo">
+      <span>Senha</span>
+      <input type="password" name="senha" autocomplete="current-password" required>
+    </label>
+    <button class="principal">Entrar</button>
+  </form>
+</main>
+</body>
+</html>
