@@ -142,6 +142,16 @@ server.listen(0, async () => {
   });
   assert.equal(login.headers.get('location'), '/admin');
   const cookieAdmin = login.headers.get('set-cookie').split(';')[0];
+  assert.ok(!login.headers.get('set-cookie').includes('Secure'), 'em http local, sem Secure');
+
+  // Atrás de um proxy TLS o cookie tem de sair com Secure, senão podia voltar
+  // numa ligação em claro.
+  const viaProxy = await fetch(P + '/entrar', {
+    method: 'POST', redirect: 'manual',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-Proto': 'https' },
+    body: 'cliente=admin&senha=' + process.env.ADMIN_PASS,
+  });
+  assert.match(viaProxy.headers.get('set-cookie'), /; Secure$/);
 
   const admin = (corpo) => fetch(P + '/api/clientes', {
     method: 'POST',

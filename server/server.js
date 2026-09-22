@@ -13,6 +13,9 @@ const PORT = Number(process.env.PORT || 3000);
 const ADMIN_PASS = process.env.ADMIN_PASS;   // só necessário no primeiro arranque
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'transferencias.db');
 
+/** Ligar só quando houver mesmo um proxy à frente — ver clienteIp(). */
+const CONFIAR_PROXY = process.env.CONFIAR_PROXY === '1';
+
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS clientes (
@@ -352,6 +355,25 @@ function fecharSessoes(clienteId) {
   for (const [k, s] of sessoes) if (s.id === clienteId) sessoes.delete(k);
 }
 
+/**
+ * IP de quem fez o pedido, visto de trás de um proxy.
+ *
+ * Sem isto, em produção `remoteAddress` é sempre 127.0.0.1 (o Caddy) e o limite
+ * de tentativas passa a ser global: dez falhas de um atacante trancavam a porta
+ * a todos os clientes durante cinco minutos.
+ *
+ * Só se lê o cabeçalho quando CONFIAR_PROXY está ligado. Em aberto, qualquer um
+ * o forjava e o limite deixava de contar seja o que for.
+ */
+function clienteIp(req) {
+  if (CONFIAR_PROXY) {
+    // O primeiro da lista é o cliente; os seguintes são proxies.
+    const encaminhado = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (encaminhado) return encaminhado;
+  }
+  return req.socket.remoteAddress || '?';
+}
+
 function travado(ip) {
   const t = tentativas.get(ip);
   if (!t || Date.now() > t.ate) return false;
@@ -365,6 +387,17 @@ function falhou(ip) {
 }
 
 // --- HTTP ------------------------------------------------------------------
+
+/**
+ * Se o browser chegou por HTTPS, mesmo que até aqui venha em claro.
+ *
+ * Em produção isto corre atrás de um proxy TLS (ngrok, Caddy) que fala http com
+ * o servidor: sem olhar para o cabeçalho, o cookie de sessão saía sempre sem
+ * `Secure` e podia acabar numa ligação em claro. Confiar no cabeçalho é seguro
+ * aqui porque o pior que um pedido forjado consegue é pôr `Secure` a mais.
+ */
+const porHttps = (req) =>
+  req.headers['x-forwarded-proto'] === 'https' || !!req.socket.encrypted;
 
 function json(res, codigo, corpo) {
   res.writeHead(codigo, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -391,11 +424,12 @@ const PROGRAMADORES = pagina('programadores.html');
 const ESTATICOS = {
   '/estilo.css': ['text/css', pagina('estilo.css')],
   '/painel.js': ['text/javascript', pagina('painel.js')],
+  '/i18n.js': ['text/javascript', pagina('i18n.js')],
 };
 
 async function tratar(req, res) {
   const url = new URL(req.url, 'http://localhost');
-  const ip = req.socket.remoteAddress || '?';
+  const ip = clienteIp(req);
 
   // 1. Webhook da app — autenticado pelo token do cliente, não por sessão.
   if (req.method === 'POST' && url.pathname === '/webhooks/transferencias') {
@@ -494,7 +528,8 @@ async function tratar(req, res) {
     sessoes.set(sid, { id: cliente.id, nome: cliente.nome, admin: !!cliente.admin });
     res.writeHead(303, {
       Location: cliente.admin ? '/admin' : '/',
-      'Set-Cookie': `sessao=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`,
+      'Set-Cookie': `sessao=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`
+        + (porHttps(req) ? '; Secure' : ''),
     });
     return res.end();
   }
@@ -515,7 +550,8 @@ async function tratar(req, res) {
     if (url.pathname === '/') {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(LOGIN.replace('<!--erro-->',
-        url.searchParams.has('erro') ? '<p class="erro">Credenciais inválidas.</p>' : ''));
+        url.searchParams.has('erro')
+          ? '<p class="erro" data-t="login.erro">Credenciais inválidas.</p>' : ''));
     }
     return json(res, 401, { erro: 'sessão inválida' });
   }

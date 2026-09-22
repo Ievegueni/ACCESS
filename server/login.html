@@ -22,20 +22,24 @@
 </head>
 <body>
 <main class="entrada">
-  <h1>Painel de transferências</h1>
-  <p class="nota">Entra com o nome do cliente e a senha que te foi dada.</p>
+  <h1 data-t="login.titulo">Painel de transferências</h1>
+  <p class="nota" data-t="login.nota">Entra com o nome do cliente e a senha que te foi dada.</p>
   <!--erro-->
   <form method="post" action="/entrar" class="painel">
     <label class="campo">
-      <span>Cliente</span>
+      <span data-t="login.cliente">Cliente</span>
       <input name="cliente" autocomplete="username" autocapitalize="off" autofocus required>
     </label>
     <label class="campo">
-      <span>Senha</span>
+      <span data-t="login.senha">Senha</span>
       <input type="password" name="senha" autocomplete="current-password" required>
     </label>
-    <button class="principal">Entrar</button>
+    <button class="principal" data-t="login.entrar">Entrar</button>
   </form>
+  <!-- Sem cabeçalho nesta página: o seletor fica por baixo do formulário. -->
+  <div class="links" id="rodapeIdioma"></div>
 </main>
+<script src="/i18n.js"></script>
+<script>montarSeletorIdioma();</script>
 </body>
 </html>

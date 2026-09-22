@@ -8,162 +8,162 @@
 </head>
 <body class="doc">
 <header>
-  <h1>Integração</h1>
+  <h1 data-t="dev.titulo">Integração</h1>
   <span class="quem" id="quem"></span>
   <span class="links">
-    <a id="voltar" href="/">&larr; Transferências</a>
-    <a href="/sair">Sair</a>
+    <a id="voltar" href="/" data-t="link.transferencias">&larr; Transferências</a>
+    <a href="/sair" data-t="link.sair">Sair</a>
   </span>
 </header>
 
-<p class="nota">
+<p class="nota" data-t="dev.intro">
   Para quem programa do lado do cliente. Há duas metades: <b>disparar</b> um
   levantamento por SMS, e <b>ler</b> as confirmações por API.
 </p>
 
 <nav class="indice">
-  <a href="#disparar">1 · Disparar</a>
-  <a href="#regras">2 · Regras do SMS</a>
-  <a href="#ler">3 · Ler as confirmações</a>
-  <a href="#erros">4 · Erros</a>
+  <a href="#disparar" data-t="dev.idx1">1 · Disparar</a>
+  <a href="#regras" data-t="dev.idx2">2 · Regras do SMS</a>
+  <a href="#ler" data-t="dev.idx3">3 · Ler as confirmações</a>
+  <a href="#erros" data-t="dev.idx4">4 · Erros</a>
 </nav>
 
 <!-- 1 -------------------------------------------------------------------- -->
 <section id="disparar">
-  <h2>1 · Disparar um levantamento</h2>
-  <p class="nota">
+  <h2 data-t="dev.h1">1 · Disparar um levantamento</h2>
+  <p class="nota" data-t="dev.h1.nota">
     Quando o utilizador final carregar em <b>Levantar</b>, o vosso sistema envia
-    um SMS para o telemóvel que corre a app. Não há API para isto: o telemóvel
-    reage ao SMS, marca o código USSD e responde aos menus sozinho.
+    um SMS para o número indicado abaixo. É esse SMS que desencadeia a
+    transferência — não há API para a pedir.
   </p>
 
   <div class="passos">
     <div class="passo">
       <span class="ordem">1</span>
       <div>
-        <b>O utilizador carrega em Levantar</b>
-        <p>No vosso sistema, como já é hoje.</p>
+        <b data-t="dev.p1.t">O utilizador carrega em Levantar</b>
+        <p data-t="dev.p1.d">No vosso sistema, como já é hoje.</p>
       </div>
     </div>
     <div class="passo">
       <span class="ordem">2</span>
       <div>
-        <b>O vosso sistema envia um SMS</b>
-        <p>Para o número abaixo, pelo gateway que já usarem. Nada de especial —
+        <b data-t="dev.p2.t">O vosso sistema envia um SMS</b>
+        <p data-t="dev.p2.d">Para o número abaixo, pelo gateway que já usarem. Nada de especial —
            é um SMS normal.</p>
       </div>
     </div>
     <div class="passo">
       <span class="ordem">3</span>
       <div>
-        <b>A app faz a transferência</b>
-        <p>Marca o USSD e responde aos menus. Demora segundos a dezenas de segundos.</p>
+        <b data-t="dev.p3.t">A transferência é executada</b>
+        <p data-t="dev.p3.d">Do nosso lado, sem intervenção vossa. Demora segundos a dezenas de segundos.</p>
       </div>
     </div>
     <div class="passo">
       <span class="ordem">4</span>
       <div>
-        <b>A confirmação chega aqui</b>
-        <p>O operador responde por SMS, a app extrai os campos e envia para este
-           painel. Lêem-na pela API da secção 3.</p>
+        <b data-t="dev.p4.t">A confirmação fica disponível</b>
+        <p data-t="dev.p4.d">Com o identificador da transação, o valor e o estado.
+           Lêem-na pela API da secção 3.</p>
       </div>
     </div>
   </div>
 
-  <h3>Para onde enviar</h3>
+  <h3 data-t="dev.h.paraonde">Para onde enviar</h3>
   <div id="numeros"></div>
 
-  <h3>O que enviar</h3>
+  <h3 data-t="dev.h.oque">O que enviar</h3>
   <div id="formato"></div>
 </section>
 
 <!-- 2 -------------------------------------------------------------------- -->
 <section id="regras">
-  <h2>2 · Regras do SMS</h2>
-  <p class="nota">
+  <h2 data-t="dev.h2">2 · Regras do SMS</h2>
+  <p class="nota" data-t="dev.h2.nota">
     Cinco regras. As três primeiras fazem o pedido ser ignorado em silêncio se
     forem quebradas — não há erro nenhum a devolver, o SMS simplesmente não faz nada.
   </p>
 
   <div class="regra">
-    <b>Tem de conter o texto de disparo</b>
-    <p>A app compara sem distinguir maiúsculas, e basta estar contido na mensagem.
-       Sem ele, o SMS é ignorado.</p>
+    <b data-t="dev.r1.t">Tem de conter o texto de disparo</b>
+    <p data-t="dev.r1.d">A comparação não distingue maiúsculas, e basta o texto estar contido na
+       mensagem. Sem ele, o SMS é ignorado.</p>
   </div>
 
   <div class="regra">
-    <b>Os campos escrevem-se <code>etiqueta: valor</code></b>
-    <p>Cada campo fica disponível para a sequência configurada no telemóvel.
+    <b data-t="dev.r2.t">Os campos escrevem-se <code>etiqueta: valor</code></b>
+    <p data-t="dev.r2.d">Cada campo é lido no processamento do pedido.
        Podem ir na mesma linha ou em linhas separadas.</p>
   </div>
 
   <div class="regra perigo">
-    <b>A mensagem tem de acabar no último valor</b>
-    <p>O valor de um campo estende-se até à etiqueta seguinte ou ao fim do SMS.
+    <b data-t="dev.r3.t">A mensagem tem de acabar no último valor</b>
+    <p data-t="dev.r3.d">O valor de um campo estende-se até à etiqueta seguinte ou ao fim do SMS.
        Texto solto no fim — uma assinatura, um "Obrigado" — entra no último campo
        e a transferência sai com o valor errado.</p>
     <div class="par">
       <div class="mau">
-        <span class="etiquetaExemplo">Errado</span>
+        <span class="etiquetaExemplo" data-t="dev.errado">Errado</span>
         <code>levantar iban: AO06…219 valor: 5000<b> Obrigado!</b></code>
-        <p>O valor fica <code>5000 Obrigado!</code></p>
+        <p data-t="dev.r3.mau">O valor fica <code>5000 Obrigado!</code></p>
       </div>
       <div class="bom">
-        <span class="etiquetaExemplo">Certo</span>
+        <span class="etiquetaExemplo" data-t="dev.certo">Certo</span>
         <code>levantar iban: AO06…219 valor: 5000</code>
-        <p>O valor fica <code>5000</code></p>
+        <p data-t="dev.r3.bom">O valor fica <code>5000</code></p>
       </div>
     </div>
   </div>
 
   <div class="regra perigo">
-    <b>Nunca incluir <code>TID:</code></b>
-    <p>A app verifica primeiro se o SMS é uma confirmação do operador, e é
-       <code>TID:</code> que a identifica. Um pedido que contenha esse texto é
-       arquivado como confirmação e a transferência nunca chega a arrancar.</p>
+    <b data-t="dev.r4.t">Nunca incluir <code>TID:</code></b>
+    <p data-t="dev.r4.d">Esse texto identifica uma confirmação de transação. Um pedido que o
+       contenha é arquivado como confirmação, e a transferência nunca chega a
+       arrancar.</p>
   </div>
 
   <div class="regra perigo">
-    <b>Um pedido de cada vez</b>
-    <p>O telemóvel executa uma sequência de cada vez. Se chegar um segundo SMS
-       com a primeira ainda a correr, não arranca outra transferência: os valores
-       do segundo são injetados na que está a meio. Esperem pela confirmação do
+    <b data-t="dev.r5.t">Um pedido de cada vez</b>
+    <p data-t="dev.r5.d">O pedido é processado um de cada vez. Se chegar um segundo SMS com o
+       primeiro ainda a decorrer, não arranca outra transferência: os valores do
+       segundo são absorvidos pelo que está a meio. Esperem pela confirmação do
        anterior antes de enviar o seguinte — uma fila de um só no vosso lado.</p>
   </div>
 
-  <h3>Detalhes menores</h3>
+  <h3 data-t="dev.h.miudezas">Detalhes menores</h3>
   <ul class="miudezas">
-    <li>SMS longo pode ir partido em várias partes — a app volta a juntá-las.</li>
-    <li>As etiquetas não distinguem maiúsculas e aceitam acentos.</li>
-    <li>O telemóvel tem de estar ligado, com rede e com a app ativa nas definições
-        de acessibilidade. Se estiver desligado, o SMS perde-se — não fica em fila.</li>
+    <li data-t="dev.m1">SMS longo pode ir partido em várias partes — são juntas outra vez.</li>
+    <li data-t="dev.m2">As etiquetas não distinguem maiúsculas e aceitam acentos.</li>
+    <li data-t="dev.m3">Se o destino estiver inacessível, o SMS perde-se — não fica em fila.
+        Tratem a ausência de confirmação como um pedido que pode não ter chegado.</li>
   </ul>
 </section>
 
 <!-- 3 -------------------------------------------------------------------- -->
 <section id="ler">
-  <h2>3 · Ler as confirmações</h2>
-  <p class="nota">
+  <h2 data-t="dev.h3">3 · Ler as confirmações</h2>
+  <p class="nota" data-t="dev.h3.nota">
     <code>GET /api/v1/transferencias</code> — devolve as vossas transferências,
     as mais antigas primeiro, para poderem percorrer tudo sem saltar nada.
   </p>
 
-  <h3>Chave</h3>
+  <h3 data-t="dev.h.chave">Chave</h3>
   <div id="chave"></div>
 
-  <h3>Pedido</h3>
+  <h3 data-t="dev.h.pedido">Pedido</h3>
   <pre><code id="exemploCurl"></code></pre>
 
   <table class="parametros">
-    <thead><tr><th>Parâmetro</th><th>Omissão</th><th>Notas</th></tr></thead>
+    <thead><tr><th data-t="dev.par.parametro">Parâmetro</th><th data-t="dev.par.omissao">Omissão</th><th data-t="dev.par.notas">Notas</th></tr></thead>
     <tbody>
       <tr><td><code>desde</code></td><td><code>0</code></td>
-          <td>Devolve o que tiver <code>recebido_em</code> <b>maior</b> que isto</td></tr>
-      <tr><td><code>limite</code></td><td><code>100</code></td><td>Máximo 500</td></tr>
+          <td data-t="dev.par.desde">Devolve o que tiver <code>recebido_em</code> <b>maior</b> que isto</td></tr>
+      <tr><td><code>limite</code></td><td><code>100</code></td><td data-t="dev.par.limite">Máximo 500</td></tr>
     </tbody>
   </table>
 
-  <h3>Resposta</h3>
+  <h3 data-t="dev.h.resposta">Resposta</h3>
   <pre><code>{
   "cliente": "<span id="nomeExemplo"></span>",
   "itens": [
@@ -182,58 +182,62 @@
 }</code></pre>
 
   <div class="regra">
-    <b>Paginem por <code>proximo_desde</code>, não por data</b>
-    <p>Guardem o <code>proximo_desde</code> que vier na resposta e mandem-no como
+    <b data-t="dev.r6.t">Paginem por <code>proximo_desde</code>, não por data</b>
+    <p data-t="dev.r6.d">Guardem o <code>proximo_desde</code> que vier na resposta e mandem-no como
        <code>desde</code> no pedido seguinte. Enquanto <code>ha_mais</code> for
        <code>true</code>, peçam outra vez de imediato.</p>
   </div>
 
   <div class="regra perigo">
-    <b>Não ordenem por <code>momento</code></b>
-    <p><code>momento</code> é o relógio do telemóvel na altura em que leu o SMS.
-       Os registos chegam fora de ordem e às vezes com horas de atraso — sem rede,
-       uma confirmação fica à espera no telemóvel. Se paginarem por
-       <code>momento</code>, saltam por cima do que chegar tarde e nunca mais o veem.
-       <code>recebido_em</code> é do servidor e só cresce.</p>
+    <b data-t="dev.r7.t">Não ordenem por <code>momento</code></b>
+    <p data-t="dev.r7.d"><code>momento</code> é a hora do dispositivo no instante do registo.
+       Os registos chegam fora de ordem e às vezes com horas de atraso. Se paginarem
+       por <code>momento</code>, saltam por cima do que chegar tarde e nunca mais o
+       veem. <code>recebido_em</code> é do servidor e só cresce.</p>
   </div>
 
   <div class="regra">
-    <b>O <code>tid</code> é a chave</b>
-    <p>É único e é o identificador do operador. Usem-no para ligar a confirmação
-       ao levantamento no vosso sistema, e para não processar o mesmo duas vezes.</p>
+    <b data-t="dev.r8.t">O <code>tid</code> é a chave</b>
+    <p data-t="dev.r8.d">É o identificador único da transação. Usem-no para ligar a confirmação ao
+       levantamento no vosso sistema, e para não processar o mesmo duas vezes.</p>
   </div>
 
   <div class="regra perigo">
-    <b><code>estado: "falha"</code> quer dizer "a rever", não "não foi transferido"</b>
-    <p>A app marca <code>sucesso</code> quando o SMS do operador traz essa palavra.
-       Tudo o resto que traga um TID fica como <code>falha</code> — pode ser uma
-       falha verdadeira ou uma variante de texto ainda não vista. Não devolvam
-       dinheiro ao utilizador com base nisto sem confirmar com o operador.</p>
+    <b data-t="dev.r9.t"><code>estado: "falha"</code> quer dizer "a rever", não "não foi transferido"</b>
+    <p data-t="dev.r9.d"><code>sucesso</code> é afirmativo. <code>falha</code> significa que a
+       transação existe mas a confirmação não a deu como bem-sucedida — pode ser
+       uma falha verdadeira ou uma resposta com um texto ainda não visto. Não
+       devolvam dinheiro ao utilizador só com base nisto: confirmem connosco.</p>
   </div>
 </section>
 
 <!-- 4 -------------------------------------------------------------------- -->
 <section id="erros">
-  <h2>4 · Erros da API</h2>
+  <h2 data-t="dev.h4">4 · Erros da API</h2>
   <table class="parametros">
-    <thead><tr><th>Código</th><th>Significa</th><th>O que fazer</th></tr></thead>
+    <thead><tr><th data-t="dev.e.codigo">Código</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
     <tbody>
-      <tr><td><code>401</code></td><td>Chave inválida ou ausente</td>
-          <td>Verificar o cabeçalho <code>Authorization</code>. Não repetir.</td></tr>
-      <tr><td><code>403</code></td><td>Acesso suspenso</td>
-          <td>Falar com o administrador. Não repetir.</td></tr>
-      <tr><td><code>405</code></td><td>Método errado</td><td>Só <code>GET</code>.</td></tr>
-      <tr><td><code>503</code></td><td>Indisponível de momento</td>
-          <td>Repetir mais tarde, com espera crescente.</td></tr>
+      <tr><td><code>401</code></td><td data-t="dev.e401">Chave inválida ou ausente</td>
+          <td data-t="dev.e401.f">Verificar o cabeçalho <code>Authorization</code>. Não repetir.</td></tr>
+      <tr><td><code>403</code></td><td data-t="dev.e403">Acesso suspenso</td>
+          <td data-t="dev.e403.f">Falar com o administrador. Não repetir.</td></tr>
+      <tr><td><code>405</code></td><td data-t="dev.e405">Método errado</td><td data-t="dev.e405.f">Só <code>GET</code>.</td></tr>
+      <tr><td><code>503</code></td><td data-t="dev.e503">Indisponível de momento</td>
+          <td data-t="dev.e503.f">Repetir mais tarde, com espera crescente.</td></tr>
     </tbody>
   </table>
 </section>
 
+<script src="/i18n.js"></script>
 <script src="/painel.js"></script>
 <script>
 const clienteId = new URLSearchParams(location.search).get('cliente');
 voltar.href = clienteId ? '/admin' : '/';
-voltar.textContent = clienteId ? '← Clientes' : '← Transferências';
+voltar.dataset.t = clienteId ? 'link.clientes' : 'link.transferencias';
+voltar.dataset.original = clienteId ? '&larr; Clientes' : '&larr; Transferências';
+aplicarTraducao();   // o i18n já correu antes de o destino do link ser decidido
+
+montarSeletorIdioma(() => carregar());   // os blocos em JS têm de ser refeitos
 
 const origem = location.origin;
 
@@ -251,27 +255,28 @@ async function carregar() {
         `<code class="destino">${esc(n.bruto)}</code>`).join('')}
        </div>
        <p class="nota">${d.numeros.length > 1
-         ? 'Qualquer um destes telemóveis serve — mas o pedido só é executado pelo que o receber.'
-         : 'É este o telemóvel que executa os vossos levantamentos.'}</p>`
-    : `<div class="regra perigo"><b>Ainda não há telemóvel registado</b>
-         <p>Sem isso não há para onde enviar o SMS. Falem com o administrador do painel.</p></div>`;
+         ? t('dev.numeros.varios', 'Qualquer um destes destinos serve — mas o pedido só é executado por quem o receber.')
+         : t('dev.numeros.um', 'É este o destino que executa os vossos levantamentos.')}</p>`
+    : `<div class="regra perigo">
+         <b>${t('dev.numeros.nenhum.t', 'Ainda não há destino registado')}</b>
+         <p>${t('dev.numeros.nenhum.d', 'Sem isso não há para onde enviar o SMS. Falem com o administrador do painel.')}</p>
+       </div>`;
 
-  // O formato depende da sequência configurada naquele telemóvel, por isso é o
-  // administrador que o escreve — o servidor não vê a configuração da app.
+  // O formato depende do que foi configurado do nosso lado, por isso é o
+  // administrador que o escreve: o servidor não o descobre sozinho.
   formato.innerHTML = d.formato_sms
     ? `<pre><code>${esc(d.formato_sms)}</code></pre>
-       <p class="nota">Copiem este exemplo e substituam os valores. O texto fixo
-          tem de ficar como está.</p>`
-    : `<div class="regra perigo"><b>O formato ainda não foi definido</b>
-         <p>Depende da sequência configurada no telemóvel. Peçam-no ao administrador
-            do painel, que o publica aqui.</p></div>`;
+       <p class="nota">${t('dev.formato.nota', 'Copiem este exemplo e substituam os valores. O texto fixo tem de ficar como está.')}</p>`
+    : `<div class="regra perigo">
+         <b>${t('dev.formato.nenhum.t', 'O formato ainda não foi definido')}</b>
+         <p>${t('dev.formato.nenhum.d', 'Peçam-no ao administrador do painel, que o publica aqui.')}</p>
+       </div>`;
 
   chave.innerHTML = d.tem_chave
-    ? `<p class="nota">Já existe uma chave. Não é possível voltar a vê-la —
-         se a perderam, gerem outra (a anterior deixa de funcionar de imediato).</p>
-       <button id="gerar">Gerar outra chave</button>`
-    : `<p class="nota">Ainda não há chave. É mostrada uma única vez.</p>
-       <button id="gerar" class="principal">Gerar chave</button>`;
+    ? `<p class="nota">${t('dev.chave.existe', 'Já existe uma chave. Não é possível voltar a vê-la — se a perderam, gerem outra (a anterior deixa de funcionar de imediato).')}</p>
+       <button id="gerar">${t('dev.chave.outra', 'Gerar outra chave')}</button>`
+    : `<p class="nota">${t('dev.chave.nenhuma', 'Ainda não há chave. É mostrada uma única vez.')}</p>
+       <button id="gerar" class="principal">${t('dev.chave.gerar', 'Gerar chave')}</button>`;
   document.getElementById('gerar').onclick = gerarChave;
 
   exemploCurl.textContent =
@@ -280,8 +285,8 @@ async function carregar() {
 }
 
 async function gerarChave() {
-  if (!confirm('Gerar uma chave nova?\n\nSe já existir uma, deixa de funcionar '
-    + 'de imediato e o sistema do cliente pára até ser trocada.')) return;
+  if (!confirm(t('dev.chave.confirma', 'Gerar uma chave nova?\n\nSe já existir uma, deixa de '
+    + 'funcionar de imediato e o sistema do cliente pára até ser trocada.'))) return;
   const r = await fetch('/api/chave', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -290,7 +295,7 @@ async function gerarChave() {
   const d = await r.json();
   if (!r.ok) return alert(d.erro);
   chave.innerHTML = `<div class="configuracao">
-      <b>Chave de leitura</b> — copiem agora, não volta a ser mostrada.
+      <b>${t('dev.chave.titulo', 'Chave de leitura')}</b> — ${t('dev.chave.aviso', 'copiem agora, não volta a ser mostrada.')}
       <dl><dt>Authorization</dt><dd><code>Bearer ${esc(d.chave)}</code></dd></dl>
     </div>`;
   exemploCurl.textContent =

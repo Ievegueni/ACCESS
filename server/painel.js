@@ -1,11 +1,18 @@
 // Formatação partilhada entre o painel do cliente e o do administrador.
 
-const fmtData = new Intl.DateTimeFormat('pt-PT', { dateStyle: 'short', timeStyle: 'short' });
+// As datas seguem o idioma escolhido; os valores nunca. São kwanzas, e trocar o
+// separador decimal faria 1.500,50 parecer outro número.
 // useGrouping 'always': em pt-PT o agrupamento só entra a partir de 5 dígitos, e
 // a coluna ficava com "25 000" ao lado de "1500,5".
 const fmtNum = new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 2, useGrouping: 'always' });
 
-const data = (ms) => (ms ? fmtData.format(ms) : '—');
+// O painel de administração não carrega o i18n.js, daí a alternativa.
+const locale = () => (window.localeData ? window.localeData() : 'pt-PT');
+const tr = (chave, pt) => (window.traduzir ? window.traduzir(chave, pt) : pt);
+
+const data = (ms) => (ms
+  ? new Intl.DateTimeFormat(locale(), { dateStyle: 'short', timeStyle: 'short' }).format(ms)
+  : '—');
 
 /** Escapa texto vindo da BD antes de entrar em innerHTML (nomes, números). */
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
@@ -28,12 +35,12 @@ function montante(valor, original) {
 const kz = (v) => montante(v ?? 0);
 
 function duracao(ms) {
-  if (ms == null) return 'nunca';
+  if (ms == null) return tr('dur.nunca', 'nunca');
   const m = Math.floor(ms / 60000);
-  if (m < 1) return 'agora mesmo';
-  if (m < 60) return m + ' min';
+  if (m < 1) return tr('dur.agora', 'agora mesmo');
+  if (m < 60) return m + tr('dur.min', ' min');
   const h = Math.floor(m / 60);
-  return h < 48 ? h + ' h' : Math.floor(h / 24) + ' dias';
+  return h < 48 ? h + tr('dur.h', ' h') : Math.floor(h / 24) + tr('dur.dias', ' dias');
 }
 
 /** Uma estatística secundária da faixa de topo. */

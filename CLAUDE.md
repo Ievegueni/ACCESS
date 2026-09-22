@@ -147,6 +147,15 @@ Armadilhas já encontradas:
 - Não implementar funcionalidades de keylogging ou captura de credenciais
 - Google Play tem políticas restritas para apps com `AccessibilityService` — se o destino for a Play Store, justificar o uso claramente na ficha da app (caso contrário, distribuir via APK direto)
 
+## Documentos
+
+| Ficheiro | Para quê |
+|---|---|
+| `BACKOFFICE.md` | Contrato do webhook e as armadilhas da entrega |
+| `server/README.md` | O painel: como correr e como gerir clientes |
+| `DEPLOYMENT.md` | Instalar numa VPS, passo a passo |
+| `SPRINTS.md` | Plano faseado |
+
 ## Fases de Desenvolvimento
 
 Ver `SPRINTS.md` para o plano faseado.
