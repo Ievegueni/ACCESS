@@ -50,6 +50,7 @@ transferências em curso.
 | `iban_ultimos5` | string \| null | Últimos 5 dígitos do IBAN de destino. `null` se não vier no SMS |
 | `valor` | string \| null | Como aparece no SMS (`"500"`). String, não número — ver §4 |
 | `estado` | `"sucesso"` \| `"falha"` | Ver §3 |
+| `saldo` | string \| null | O que ficou na carteira **deste SIM**, como vem no SMS. `null` se a mensagem não o trouxer — ver §5.1 |
 | `momento` | number | Epoch em milissegundos, **do telemóvel** — ver §4 |
 | `numero` | string *(opcional)* | Número do SIM deste telemóvel. Diz de que cliente é a transferência — ver §2.1 |
 | `ordem_id` | number *(opcional)* | A ordem que deu origem a isto, quando veio por API — ver §8 |
@@ -172,6 +173,8 @@ intervalo de datas.
 **Totais do dia/mês** — soma dos valores com `estado = 'sucesso'`, e contagem de
 `falha` em destaque, porque é o que precisa de atenção humana.
 
+**Carteiras, uma por telemóvel** — ver §5.1.
+
 **Saúde da ligação** — o mais importante e o mais esquecido: *"há quanto tempo não
 chega nada?"*. Se o telemóvel ficar sem rede, for reiniciado, ou a app for morta
 pela gestão de bateria da Samsung, o sintoma é silêncio — e silêncio é
@@ -180,12 +183,47 @@ alerta acima de um limiar que faça sentido para o teu volume.
 
 ---
 
+## 5.1 Carteiras: saldo e saúde por telemóvel
+
+Com vários SIM a trabalhar para o mesmo cliente, duas perguntas deixam de ter
+resposta no agregado: **quanto resta em cada um** e **qual deles se calou**. Um
+telemóvel sem saldo, ou desligado, fica escondido atrás dos outros.
+
+O painel mostra um cartão por número registado:
+
+| Campo | De onde vem |
+|---|---|
+| `saldo` | o `saldo` da confirmação **mais recente** daquele SIM |
+| `saldo_em` | o `momento` dessa confirmação — é a idade do número |
+| `silencio_ms` | `now() - max(recebido_em)` **daquele número**, não do cliente |
+| `transferencias` | quantas vieram daquele SIM |
+
+**O saldo é uma fotografia, não um extrato.** É o que o operador disse na última
+transferência daquele telemóvel. Um carregamento feito por fora não aparece até à
+transferência seguinte, e um telemóvel calado mostra um número velho — por isso o
+`saldo_em` vai sempre ao lado, e o painel escreve "de há 2 h". Tratar como
+indicação para decidir onde carregar, nunca como saldo contabilístico: a fonte de
+verdade continua a ser o operador (§7).
+
+Uma confirmação sem saldo no texto **não apaga** o último conhecido: fica o que se
+sabia, com a data que tinha.
+
+Para isto ser exato, as transferências guardam também `numero_norm` — o número
+reduzido aos últimos 9 dígitos. Sem essa coluna, o mesmo SIM escrito de duas
+maneiras contava como duas carteiras.
+
 ## 6. Segurança
 
 **O que a app envia é deliberadamente pouco.** O SMS do operador traz o nome
-completo do titular, o IBAN quase inteiro e o saldo da conta. Nada disso sai do
-telemóvel — só TID, últimos 5 dígitos, valor e estado. Mantém assim: o que não está
-no servidor não pode ser exposto por ele.
+completo do titular e o IBAN quase inteiro: **isso não sai do telemóvel**. Sai
+TID, últimos 5 dígitos, valor, estado e saldo. Mantém assim: o que não está no
+servidor não pode ser exposto por ele.
+
+**O saldo é a exceção, e foi uma decisão consciente.** Entrou porque sem ele não
+há como saber quanto resta em cada telemóvel sem ir a cada um — é a carteira do
+próprio dono do painel, não de terceiros. O preço é real: um servidor comprometido
+passa a expor saldos. Se algum dia o painel servir carteiras que não são de quem o
+opera, esta decisão tem de ser reavaliada.
 
 **O token é um segredo partilhado, não identidade.** Está guardado em claro nas
 preferências da app. Alguém com acesso ao telemóvel desbloqueado consegue lê-lo, por
@@ -305,6 +343,8 @@ repete é o cliente, com uma `ref` nova, depois de ver o estado.
 | Ordens por API (§8) — servidor | ✅ endpoints, idempotência, long-poll, expiração |
 | Ordens por API (§8) — app | ✅ `OrderPoller` no serviço; **falta testar no telemóvel** |
 | Ordens por API (§8) — página dos programadores | ✅ secção 1, em pt e zh |
+| Carteiras por telemóvel (§5.1) | ✅ saldo e silêncio por número, no painel |
+| Saldo depois de um carregamento | ⬜ só atualiza na transferência seguinte — o SMS de carregamento ainda não foi visto |
 | Envio ponta-a-ponta contra um servidor | ⬜ testado com `curl`; **falta a app real** contra um URL HTTPS |
 | Texto do SMS de transferência falhada | ⬜ desconhecido (ver §3) |
 | Reenvio ao voltar a rede | ⬜ só na chegada de SMS ou ao abrir a app |

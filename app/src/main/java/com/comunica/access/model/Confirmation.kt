@@ -15,6 +15,15 @@ data class Confirmation(
     val valor: String?,
     val sucesso: Boolean,
     val momento: Long,
+    /**
+     * O saldo que ficou na carteira deste SIM, tal como vem no SMS.
+     *
+     * É a exceção deliberada à regra do payload mínimo: sem ele não há maneira de
+     * saber quanto resta em cada telemóvel sem ir a cada um deles. É o saldo das
+     * carteiras do próprio dono do painel, não de terceiros — o nome do titular e
+     * o IBAN completo continuam a nunca sair daqui.
+     */
+    val saldo: String? = null,
 ) {
     /**
      * [numero] é o número do SIM deste telemóvel, escrito à mão nas definições.
@@ -32,6 +41,7 @@ data class Confirmation(
         .put("valor", valor)
         .put("estado", if (sucesso) "sucesso" else "falha")
         .put("momento", momento)
+        .put("saldo", saldo)
         .apply { numero?.trim()?.takeIf { it.isNotEmpty() }?.let { put("numero", it) } }
         // Só quando a transferência veio de uma ordem da API: é o que a fecha no
         // painel. Omitido, não vazio, nos outros casos.
@@ -62,6 +72,7 @@ data class Confirmation(
                 valor = VALOR.find(message)?.groupValues?.get(1),
                 sucesso = message.contains("sucesso", ignoreCase = true),
                 momento = momento,
+                saldo = SALDO.find(message)?.groupValues?.get(1),
             )
         }
 
@@ -69,5 +80,9 @@ data class Confirmation(
         private val TID = Regex("""TID:+\s*([A-Za-z0-9.\-]+)""")
         private val IBAN = Regex("""AO\d{2}[\d*]+""")
         private val VALOR = Regex("""\bde\s+([\d.,]+)\s*Kz""", RegexOption.IGNORE_CASE)
+
+        // "O novo saldo Afrimoney e: 2440.0 Kz" — entre "saldo" e o número há
+        // texto que muda (a marca do operador), daí o [^:] até aos dois pontos.
+        private val SALDO = Regex("""saldo[^:\d]*:?\s*([\d.,]+)\s*Kz""", RegexOption.IGNORE_CASE)
     }
 }

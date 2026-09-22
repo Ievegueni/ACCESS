@@ -142,9 +142,12 @@ Armadilhas já encontradas:
 
 - Nunca capturar/enviar dados do ecrã para fora do dispositivo sem consentimento explícito e visível ao utilizador
 - **Exceção deliberada:** o webhook de confirmações envia para o endpoint que o
-  utilizador configurar (ver `BACKOFFICE.md`). Só saem TID, últimos 5 dígitos do
-  IBAN, valor e estado — nunca o nome do titular, o IBAN completo ou o saldo, que
-  vêm no mesmo SMS. Só HTTPS. Manter este payload mínimo ao alterar o parser
+  utilizador configurar (ver `BACKOFFICE.md`). Saem TID, últimos 5 dígitos do
+  IBAN, valor, estado e **saldo** — nunca o nome do titular nem o IBAN completo,
+  que vêm no mesmo SMS. Só HTTPS. Manter este payload mínimo ao alterar o parser
+- O saldo foi acrescentado a pedido do dono do painel: são as carteiras dos SIM
+  dele, e sem isso não há como saber quanto resta em cada telemóvel sem ir a cada
+  um. Tem consequência — um servidor comprometido passa a expor saldos reais
 - Ativação do serviço é sempre manual (Definições > Acessibilidade) — nunca tentar contornar isto
 - Não implementar funcionalidades de keylogging ou captura de credenciais
 - Google Play tem políticas restritas para apps com `AccessibilityService` — se o destino for a Play Store, justificar o uso claramente na ficha da app (caso contrário, distribuir via APK direto)

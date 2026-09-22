@@ -25,6 +25,26 @@ class ConfirmationTest {
     }
 
     @Test
+    fun `le o saldo que ficou na carteira`() {
+        // É o que o painel mostra por telemóvel: quanto resta naquele SIM.
+        assertEquals("2440.0", Confirmation.parse(real, 0L)!!.saldo)
+        assertTrue(Confirmation.parse(real, 0L)!!.toJson().contains("\"saldo\":\"2440.0\""))
+        // O custo e a taxa vêm no mesmo SMS e não podem ser confundidos com ele.
+        assertFalse(Confirmation.parse(real, 0L)!!.toJson().contains("26.32"))
+    }
+
+    @Test
+    fun `sem saldo no sms o campo vai null`() {
+        // Um texto que não traga saldo não pode inventar um: o painel mostraria
+        // uma carteira errada e o dono decidia em cima disso.
+        // Sem valor, a chave nem aparece (é como o org.json trata um null) e o
+        // servidor lê isso como "não veio" — que é o que é.
+        val c = Confirmation.parse("Transferencia efetuada. TID:: MP1.2.C3.", 0L)!!
+        assertNull(c.saldo)
+        assertFalse(c.toJson().contains("saldo"))
+    }
+
+    @Test
     fun `sms sem TID nao e confirmacao`() {
         assertNull(Confirmation.parse("iban: 004700000872365010219\nvalor: 500", 0L))
         assertNull(Confirmation.parse("O seu codigo e 4821", 0L))
@@ -38,10 +58,13 @@ class ConfirmationTest {
     }
 
     @Test
-    fun `nome e saldo nunca entram no payload`() {
+    fun `o nome do titular nunca entra no payload`() {
+        // O saldo passou a sair (é a carteira do próprio dono do painel, e sem ele
+        // não há como saber quanto resta em cada telemóvel). O nome do titular e o
+        // IBAN completo continuam a ficar no telemóvel.
         val json = Confirmation.parse(real, 1_000L)!!.toJson()
         assertFalse(json.contains("IEVEGUENI"))
-        assertFalse(json.contains("2440"))
+        assertFalse(json.contains("MANUEL"))
         // E o IBAN vai truncado, nunca inteiro.
         assertFalse(json.contains("AO06"))
         assertTrue(json.contains("10219"))

@@ -5,7 +5,7 @@ process.env.DB_PATH = ':memory:';
 const assert = require('node:assert/strict');
 const {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
-  normalizarNumero, atribuir, registarNumero, porAtribuir, db,
+  normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db,
   validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
 } = require('./server.js');
 
@@ -92,10 +92,10 @@ const gravar = (clienteId, p, por = 'token') => {
   const r = validar(p).registo;
   db.prepare(`INSERT INTO transferencias
       (tid, cliente_id, iban_ultimos5, valor_texto, valor, estado, momento, recebido_em,
-       numero_origem, atribuido_por)
-     VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tid) DO NOTHING`)
+       numero_origem, numero_norm, atribuido_por, saldo_texto, saldo)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tid) DO NOTHING`)
     .run(r.tid, clienteId, r.iban_ultimos5, r.valor_texto, r.valor, r.estado, r.momento,
-         Date.now(), r.numero_origem, por);
+         Date.now(), r.numero_origem, r.numero_norm, por, r.saldo_texto, r.saldo);
 };
 
 const agora = Date.now();
@@ -119,6 +119,43 @@ assert.equal(rB.rever, 0);
 assert.equal(consultar(a, { estado: 'falha' }).itens.length, 1);
 assert.equal(resumo(criar('Cliente C')).total.v, 0, 'cliente sem registos não rebenta');
 assert.equal(resumo(criar('Cliente D')).saude.silencio_ms, null);
+
+// --- carteiras: quanto resta em cada telemóvel -----------------------------
+// Três SIM do mesmo cliente: o painel tem de os separar, senão um telemóvel que
+// se cale (ou que fique sem saldo) fica escondido atrás dos outros.
+const pool = criar('Cliente Pool');
+for (const n of ['931 000 001', '931 000 002', '931 000 003']) registarNumero(pool, n);
+
+const comSaldo = (tid, numero, valor, saldo, quando) =>
+  gravar(pool, { ...bom, tid, valor, saldo, numero, momento: quando }, 'numero');
+
+comSaldo('POOL.A1', '931000001', '500', '5000', agora - 3000);
+comSaldo('POOL.A2', '931000001', '500', '4500', agora - 1000);   // mais recente do SIM 1
+comSaldo('POOL.B1', '+244 931 000 002', '1.000', '12.500,50', agora - 2000);
+// O terceiro nunca enviou nada.
+
+const c = carteiras(pool);
+assert.equal(c.length, 3, 'uma carteira por número registado');
+
+assert.equal(c[0].saldo, 4500, 'o saldo é o da confirmação mais recente, não a primeira');
+assert.equal(c[0].transferencias, 2);
+assert.ok(c[0].silencio_ms < 5000);
+
+assert.equal(c[1].saldo, 12500.5, 'formato angolano interpretado');
+assert.equal(c[1].saldo_texto, '12.500,50', 'e o texto original fica guardado');
+assert.equal(c[1].transferencias, 1, 'a forma como o número foi escrito não separa carteiras');
+
+assert.equal(c[2].saldo, null, 'sem confirmações não se inventa saldo');
+assert.equal(c[2].silencio_ms, null, 'null = nunca deu sinal, que não é o mesmo que zero');
+
+// Uma confirmação sem saldo no SMS não apaga o último conhecido.
+comSaldo('POOL.A3', '931000001', '100', null, agora - 500);
+assert.equal(carteiras(pool)[0].saldo, 4500, 'o saldo conhecido mantém-se');
+assert.equal(carteiras(pool)[0].transferencias, 3, 'mas a transferência conta');
+
+// E as carteiras de um cliente nunca somam as de outro.
+assert.equal(carteiras(a).length, 1);
+assert.equal(carteiras(a)[0].saldo, null, 'o cliente A não vê o saldo do pool');
 
 // --- webhook ao vivo: é aqui que se vê o código de resposta, que decide se a app
 //     guarda ou descarta o payload ---------------------------------------------

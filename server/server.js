@@ -82,6 +82,25 @@ if (!colunas.includes('atribuido_por')) {
   db.exec("ALTER TABLE transferencias ADD COLUMN atribuido_por TEXT NOT NULL DEFAULT 'token'");
 }
 
+if (!colunas.includes('saldo')) {
+  // O que ficou na carteira daquele SIM depois desta transferência, como veio no
+  // SMS e já interpretado. É o que permite responder a "quanto tenho em cada
+  // telemóvel" sem ir a cada um deles.
+  db.exec('ALTER TABLE transferencias ADD COLUMN saldo_texto TEXT');
+  db.exec('ALTER TABLE transferencias ADD COLUMN saldo REAL');
+}
+if (!colunas.includes('numero_norm')) {
+  // `numero_origem` é como veio escrito, e por isso não serve para agrupar: o
+  // mesmo SIM aparece como "+244 923…" e "923456789". A forma normalizada em
+  // coluna própria é o que torna as consultas por telemóvel exatas e baratas.
+  db.exec('ALTER TABLE transferencias ADD COLUMN numero_norm TEXT');
+  const atualizar = db.prepare('UPDATE transferencias SET numero_norm = ? WHERE tid = ?');
+  for (const t of db.prepare('SELECT tid, numero_origem FROM transferencias').all()) {
+    atualizar.run(normalizarNumero(t.numero_origem), t.tid);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_numero_norm ON transferencias(cliente_id, numero_norm, momento DESC)');
+}
+
 const colunasCliente = db.prepare('PRAGMA table_info(clientes)').all().map((c) => c.name);
 if (!colunasCliente.includes('formato_sms')) {
   // Exemplo do SMS de pedido que o sistema do cliente tem de enviar. Vive aqui
@@ -267,7 +286,7 @@ function registarNumero(clienteId, bruto) {
 /** Valida o payload da app. Devolve {erro} ou {registo}. */
 function validar(corpo) {
   if (!corpo || typeof corpo !== 'object') return { erro: 'corpo não é um objeto' };
-  const { tid, iban_ultimos5, valor, estado, momento, numero, ordem_id } = corpo;
+  const { tid, iban_ultimos5, valor, estado, momento, numero, ordem_id, saldo } = corpo;
   if (typeof tid !== 'string' || !TID_VALIDO.test(tid)) return { erro: 'tid inválido' };
   if (estado !== 'sucesso' && estado !== 'falha') return { erro: 'estado inválido' };
   if (!Number.isFinite(momento) || momento <= 0) return { erro: 'momento inválido' };
@@ -277,6 +296,8 @@ function validar(corpo) {
   // Só dígitos, ponto e vírgula — é o que o parser da app extrai. Fecha também a
   // porta a HTML injetado, já que o painel mostra este texto tal como veio.
   if (valor != null && !/^[\d.,]{1,20}$/.test(String(valor))) return { erro: 'valor inválido' };
+  // Mesma regra do valor: é texto do SMS e vai aparecer no painel.
+  if (saldo != null && !/^[\d.,]{1,20}$/.test(String(saldo))) return { erro: 'saldo inválido' };
   // Campo opcional (a app só o envia se estiver configurado). Formato largo de
   // propósito — o que conta é a forma normalizada, não como foi escrito.
   if (numero != null && !/^[\d+()\-. ]{1,25}$/.test(String(numero))) {
@@ -294,9 +315,12 @@ function validar(corpo) {
       iban_ultimos5: iban_ultimos5 == null ? null : String(iban_ultimos5),
       valor_texto: valor == null ? null : String(valor),
       valor: paraNumero(valor),
+      saldo_texto: saldo == null ? null : String(saldo),
+      saldo: paraNumero(saldo),
       estado,
       momento,
       numero_origem: numero == null ? null : String(numero).trim() || null,
+      numero_norm: normalizarNumero(numero),
       ordem_id: ordem_id ?? null,
     },
   };
@@ -462,12 +486,51 @@ function consultar(clienteId, { estado, de, ate, limite = 500 }) {
      ORDER BY momento DESC LIMIT ?`   // por momento, nunca por ordem de chegada
   ).all(...args, Math.min(Number(limite) || 500, 2000));
 
-  return { itens, numeros: numerosDe(clienteId), ...resumo(clienteId) };
+  return { itens, numeros: numerosDe(clienteId), carteiras: carteiras(clienteId), ...resumo(clienteId) };
 }
 
 const numerosDe = (clienteId) => db.prepare(
   'SELECT numero, bruto FROM numeros WHERE cliente_id = ? ORDER BY criado_em'
 ).all(clienteId);
+
+/**
+ * Uma carteira por telemóvel: quanto lá resta e há quanto tempo não dá sinal.
+ *
+ * O saldo é o da confirmação mais recente daquele SIM — é uma fotografia do
+ * instante em que o operador a enviou, não um extrato. Se o telemóvel esteve sem
+ * rede, ou se alguém carregou a conta por fora, o número está velho: por isso vai
+ * sempre acompanhado de `saldo_em`, e é isso que o painel mostra ao lado.
+ *
+ * O silêncio é por número (e não só do cliente) de propósito: com três telemóveis,
+ * um que se cale fica escondido atrás dos outros dois no agregado.
+ */
+function carteiras(clienteId) {
+  const ultimoSaldo = db.prepare(
+    `SELECT saldo, saldo_texto, momento FROM transferencias
+     WHERE cliente_id = ? AND numero_norm = ? AND saldo IS NOT NULL
+     ORDER BY momento DESC, recebido_em DESC LIMIT 1`
+  );
+  const actividade = db.prepare(
+    `SELECT MAX(recebido_em) r, COUNT(*) n FROM transferencias
+     WHERE cliente_id = ? AND numero_norm = ?`
+  );
+
+  const agora = Date.now();
+  return numerosDe(clienteId).map((n) => {
+    const s = ultimoSaldo.get(clienteId, n.numero);
+    const a = actividade.get(clienteId, n.numero);
+    return {
+      numero: n.numero,
+      bruto: n.bruto,
+      saldo: s?.saldo ?? null,
+      saldo_texto: s?.saldo_texto ?? null,
+      saldo_em: s?.momento ?? null,
+      transferencias: a.n,
+      // null = nunca chegou nada deste telemóvel
+      silencio_ms: a.r ? agora - a.r : null,
+    };
+  });
+}
 
 function listarClientes() {
   return db.prepare(
@@ -608,12 +671,13 @@ async function tratar(req, res) {
       db.prepare(
         `INSERT INTO transferencias
            (tid, cliente_id, iban_ultimos5, valor_texto, valor, estado, momento,
-            recebido_em, numero_origem, atribuido_por)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            recebido_em, numero_origem, numero_norm, atribuido_por, saldo_texto, saldo)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(tid) DO NOTHING`
       ).run(registo.tid, clienteId, registo.iban_ultimos5, registo.valor_texto,
             registo.valor, registo.estado, registo.momento, recebidoEmUnico(),
-            registo.numero_origem, por);
+            registo.numero_origem, registo.numero_norm, por,
+            registo.saldo_texto, registo.saldo);
 
       // Fecha a ordem que originou esta transferência, se veio por API. Do mesmo
       // cliente a quem a transferência foi atribuída — é por esse que o telemóvel
@@ -1047,6 +1111,6 @@ if (require.main === module) {
 
 module.exports = {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
-  normalizarNumero, atribuir, registarNumero, porAtribuir, db, server,
+  normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db, server,
   validarOrdem, criarOrdem, tomarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
 };

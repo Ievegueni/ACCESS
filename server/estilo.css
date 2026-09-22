@@ -140,6 +140,29 @@ header a:hover { background: var(--superficie); color: var(--texto); }
 .estatistica.alerta .valor { color: var(--aviso); }
 .estatistica.grave .valor { color: var(--grave); }
 
+/* --- carteiras: um cartão por telemóvel ---------------------------------- */
+
+.carteiras {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: .9rem; margin: -.6rem 0 1.5rem;
+}
+.carteira {
+  background: var(--superficie); border: 1px solid var(--linha);
+  border-radius: var(--raio); box-shadow: var(--sombra); padding: 1rem 1.15rem;
+  /* A faixa da esquerda é o estado: só aparece quando há motivo para olhar. */
+  border-left: 3px solid transparent;
+}
+.carteira.alerta { border-left-color: var(--aviso); }
+.carteira.grave { border-left-color: var(--grave); }
+.carteira .numero { font-family: var(--mono); font-size: .82rem; color: var(--suave); }
+.carteira .valor {
+  display: block; margin-top: .3rem; font-size: 1.45rem; font-weight: 650;
+  letter-spacing: -.025em; font-variant-numeric: tabular-nums;
+}
+.carteira .sub { display: block; margin-top: .25rem; font-size: .78rem; color: var(--ténue); }
+.carteira .sub.alerta { color: var(--aviso); }
+.carteira .sub.grave { color: var(--grave); }
+
 /* --- barra de filtros ---------------------------------------------------- */
 
 .barra {

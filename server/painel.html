@@ -26,6 +26,8 @@
   <div class="estatisticas" id="estatisticas"></div>
 </section>
 
+<section class="carteiras" id="carteiras" aria-label="Carteiras" hidden></section>
+
 <form class="barra" id="filtros">
   <label class="campo">
     <span data-t="filtro.estado">Estado</span>
@@ -85,11 +87,18 @@ async function carregar() {
     + (d.rever ? ` · ${d.rever} ${t('sub.arever', 'a rever')}` : '');
 
   const saude = cartaoSaude(d.saude, d.criado_em);
+  // O saldo vem primeiro: é a pergunta de quem vai carregar as contas.
+  const comSaldo = d.carteiras.filter(c => c.saldo != null);
+  const total = comSaldo.reduce((s, c) => s + c.saldo, 0);
   estatisticas.innerHTML =
-    estatistica(t('est.24h', 'Últimas 24 h'), montante(d.dia.v))
+    (comSaldo.length ? estatistica(t('est.carteira', 'Saldo em carteira'), montante(total)) : '')
+    + estatistica(t('est.24h', 'Últimas 24 h'), montante(d.dia.v))
     + estatistica(t('est.30d', 'Últimos 30 dias'), montante(d.mes.v))
     + estatistica(t('est.rever', 'A rever'), d.rever, d.rever ? 'alerta' : '')
     + estatistica(t('est.semReceber', 'Sem receber há'), saude.texto, saude.classe);
+
+  carteiras.hidden = d.carteiras.length === 0;
+  carteiras.innerHTML = d.carteiras.map(c => cartaoCarteira(c, d.criado_em)).join('');
 
   // A coluna do telemóvel só diz alguma coisa quando há mais do que um: com um
   // telemóvel só, repete o mesmo número em todas as linhas.
@@ -109,6 +118,31 @@ async function carregar() {
       <td class="quando">${data(item.recebido_em)}</td>
     </tr>`).join('');
   vazio.hidden = d.itens.length > 0;
+}
+
+/**
+ * Um telemóvel: quanto lá resta, de quando é esse número, e se ainda dá sinal.
+ *
+ * O saldo vem do último SMS de confirmação daquele SIM, por isso é a fotografia
+ * de um instante — o "de há X" ao lado não é enfeite, é o que evita carregar as
+ * contas em cima de um número velho. Um carregamento feito por fora não aparece
+ * aqui até à transferência seguinte.
+ */
+function cartaoCarteira(c, criadoEm) {
+  // O criado_em do cliente evita pintar de vermelho um telemóvel acabado de
+  // registar, que ainda não teve oportunidade de enviar nada.
+  const saude = cartaoSaude(c, criadoEm);
+  const semNada = c.silencio_ms == null;
+  return `<div class="carteira ${saude.classe}">
+      <span class="numero">${esc(c.bruto)}</span>
+      <b class="valor">${c.saldo == null ? '—' : montante(c.saldo, c.saldo_texto)}</b>
+      <span class="sub">${c.saldo_em
+        ? `${t('cart.de', 'de há')} ${duracao(Date.now() - c.saldo_em)}`
+        : t('cart.semSaldo', 'saldo ainda desconhecido')}</span>
+      <span class="sub ${saude.classe}">${semNada
+        ? t('cart.semSinal', 'nunca enviou nada')
+        : `${t('cart.recebido', 'recebido há')} ${saude.texto}`}</span>
+    </div>`;
 }
 
 const pillEstado = (estado) => estado === 'falha'
