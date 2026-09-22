@@ -1,6 +1,7 @@
 package com.comunica.access.accessibility
 
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.comunica.access.model.Sequence
@@ -35,8 +36,34 @@ object SequenceRunner {
     var name: String = ""
         private set
 
+    /**
+     * A ordem (API) que mandou correr isto, se veio por aí. Null quando foi um SMS
+     * ou o botão "Executar".
+     *
+     * Sobrevive ao fim da sequência de propósito: quem a lê é a confirmação, que
+     * chega por SMS segundos depois, e é ela que fecha a ordem no painel. Só se
+     * apaga quando é usada ou quando outra sequência arranca — senão a
+     * confirmação seguinte, de uma transferência manual, fechava a ordem errada.
+     *
+     * Em memória, como o resto do runner: se o processo morrer entre marcar e o
+     * SMS, a transferência fica registada na mesma e a ordem expira no painel.
+     */
+    var orderId: Int? = null
+
+    /** Relógio monótono do arranque, para a sequência não ficar pendurada. */
+    private var startedAt = 0L
+
+    /**
+     * Uma sequência que não termina deixa de contar ao fim de [MAX_MS].
+     *
+     * Se a marcação falha, se o menu USSD nunca aparece ou se o operador responde
+     * com um ecrã que nenhum passo espera, o runner ficava "a correr" para sempre:
+     * o SMS seguinte era lido como resposta a esta sequência em vez de disparar a
+     * sua, e uma ordem da API nunca mais era executada. O limite é aqui, no
+     * getter, para valer para todos os caminhos de entrada.
+     */
     val running: Boolean
-        get() = index < steps.size
+        get() = index < steps.size && SystemClock.elapsedRealtime() - startedAt < MAX_MS
 
     val progress: String
         get() = "$index/${steps.size}"
@@ -45,13 +72,16 @@ object SequenceRunner {
         sequence: Sequence,
         smsValue: String? = null,
         smsFields: Map<String, String> = emptyMap(),
+        orderId: Int? = null,
     ) {
         steps = sequence.steps
         name = sequence.name
         index = 0
+        startedAt = SystemClock.elapsedRealtime()
         lastAnswered = null
         this.smsValue = smsValue
         this.smsFields = smsFields
+        this.orderId = orderId
     }
 
     fun stop() {
@@ -60,7 +90,11 @@ object SequenceRunner {
         lastAnswered = null
         smsValue = null
         smsFields = emptyMap()
+        orderId = null
     }
+
+    /** A ordem em curso, e limpa-a: só a primeira confirmação lhe pertence. */
+    fun takeOrderId(): Int? = orderId.also { orderId = null }
 
     /**
      * Um SMS pode chegar com a sequência já a meio (o caso do código enviado
@@ -202,6 +236,8 @@ object SequenceRunner {
 
     // '}' escapado: o Android usa ICU, que o rejeita solto (a JVM aceita-o).
     private val PLACEHOLDER = Regex("""\{([\p{L}\w]+)\}""")
+    /** Uma sequência USSD leva segundos; cinco minutos só se ficou pendurada. */
+    private const val MAX_MS = 5 * 60 * 1000L
     private const val CONFIRM_ID = "android:id/button1"
     private val CONFIRM_LABELS = listOf("Enviar", "Send", "OK", "Confirmar", "Submit", "Continuar")
     private const val TAG = "AutomationService"

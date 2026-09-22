@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, db,
+  validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
 } = require('./server.js');
 
 // --- formato angolano: ponto é milhares, vírgula é decimal -----------------
@@ -28,6 +29,15 @@ assert.equal(validar({ ...bom, iban_ultimos5: null, valor: null }).erro, undefin
 assert.equal(validar({ ...bom, numero: '+244 923 456 789' }).erro, undefined);
 assert.ok(validar({ ...bom, numero: 'o meu telemovel' }).erro);
 assert.equal(validar(bom).registo.numero_origem, null, 'sem numero no payload fica null');
+
+// --- ordens: os campos entram nos passos como {valor}, e os marcadores da app
+//     são minúsculas — "VALOR" tem de chegar lá como "valor" -------------------
+assert.deepEqual(
+  JSON.parse(validarOrdem({ ref: 'r1', sequencia: 'Transferir', campos: { VALOR: '500' } }).ordem.campos),
+  { valor: '500' },
+);
+assert.equal(validarOrdem({ ref: 'r1', sequencia: 'T', numero: '+244 923 456 789' }).ordem.numero, '923456789');
+assert.ok(validarOrdem(null).erro);
 
 // --- números de telemóvel: a mesma SIM escrita de todas as maneiras ---------
 assert.equal(normalizarNumero('+244 923 456 789'), '923456789');
@@ -272,6 +282,139 @@ server.listen(0, async () => {
   assert.notEqual(chaveNova, chave);
   assert.equal((await lerApi('', chave)).status, 401, 'a chave antiga morre');
   assert.equal((await lerApi('', chaveNova)).status, 200);
+
+  // --- ordens: o trigger por API ----------------------------------------------
+  // O telemóvel com o token t2 é do cliente A; o número 924 111 222 está
+  // registado no B. É por aí que se vê a quem pertencem as ordens.
+  const chaveA = (await (await admin({ accao: 'chaveApi', id: a })).json()).chave;
+
+  const pedir = (corpo, k = chaveA) => fetch(P + '/api/v1/ordens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${k}` },
+    body: JSON.stringify(corpo),
+  });
+  const buscar = (qs = '', t = t2) => fetch(`${P}/api/telemovel/ordens${qs}`, {
+    headers: { Authorization: `Bearer ${t}` },
+  });
+
+  assert.equal((await pedir({ ref: 'x1', sequencia: 'Transferir' }, 'ak_errada')).status, 401);
+  assert.equal((await buscar('', 'token-errado')).status, 401);
+
+  const base = { ref: 'PED-001', sequencia: 'Transferir', campos: { valor: '500', iban: 'AO06.0040' } };
+  const criada = await pedir(base);
+  assert.equal(criada.status, 201);
+  const o1 = await criada.json();
+  assert.equal(o1.estado, 'pendente');
+  assert.deepEqual(o1.campos, { valor: '500', iban: 'AO06.0040' });
+
+  // Repetir a mesma ref não cria outra transferência — é a rede do cliente que
+  // pode falhar depois de nós gravarmos, e ele tem de poder tentar de novo.
+  const repetida = await pedir({ ...base, campos: { valor: '99999' } });
+  assert.equal(repetida.status, 200);
+  const o2 = await repetida.json();
+  assert.equal(o2.id, o1.id);
+  assert.deepEqual(o2.campos, o1.campos, 'a repetição não sobrescreve o que já estava');
+
+  for (const mau of [
+    { ...base, ref: 'com espaço' },
+    { ...base, ref: '' },
+    { ...base, sequencia: '<script>' },
+    { ...base, sequencia: '' },
+    { ...base, ref: 'PED-002', campos: { 'va lor': '5' } },
+    { ...base, ref: 'PED-002', campos: { valor: '<b>' } },
+    { ...base, ref: 'PED-002', campos: { valor: 'a\nb' } },
+    { ...base, ref: 'PED-002', numero: '123' },
+  ]) {
+    assert.equal((await pedir(mau)).status, 400, `devia recusar: ${JSON.stringify(mau)}`);
+  }
+
+  // O telemóvel do B não pode levar uma ordem do A, mesmo com o token do A:
+  // manda o número, tal como no webhook.
+  assert.equal((await buscar('?numero=924111222')).status, 204, 'nada para o cliente B');
+
+  const levada = await buscar();
+  assert.equal(levada.status, 200);
+  const trabalho = await levada.json();
+  assert.equal(trabalho.sequencia, 'Transferir');
+  assert.deepEqual(trabalho.campos, { valor: '500', iban: 'AO06.0040' });
+
+  // Entregue uma vez é entregue: um segundo telemóvel não repete a transferência.
+  assert.equal((await buscar()).status, 204, 'a ordem não sai duas vezes');
+
+  const verOrdem = (ref, k = chaveA) => fetch(`${P}/api/v1/ordens/${ref}`, {
+    headers: { Authorization: `Bearer ${k}` },
+  }).then((r) => r.json());
+  assert.equal((await verOrdem('PED-001')).estado, 'entregue');
+  assert.equal((await fetch(`${P}/api/v1/ordens/NAO-EXISTE`, {
+    headers: { Authorization: `Bearer ${chaveA}` },
+  })).status, 404);
+
+  // A chave do B não vê as ordens do A.
+  assert.equal((await fetch(`${P}/api/v1/ordens/PED-001`, {
+    headers: { Authorization: `Bearer ${chaveNova}` },
+  })).status, 404);
+
+  // A confirmação fecha a ordem: é isto que liga o pedido do cliente ao TID.
+  assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0001', ordem_id: trabalho.id }), 200);
+  const fechada = await verOrdem('PED-001');
+  assert.equal(fechada.estado, 'concluida');
+  assert.equal(fechada.tid, 'ORD111.0001');
+
+  // Um ordem_id velho ou de outro cliente não pode rejeitar a transferência: o
+  // dinheiro moveu-se e o registo vale mais do que a ligação à ordem.
+  assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0002', ordem_id: 999999 }), 200);
+  assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0003', ordem_id: 'abc' }), 400, 'mas tem de ser um id');
+
+  // Ordem entregue que nunca deu confirmação expira — e nunca volta a pendente:
+  // reenviar uma transferência sozinho é pior do que não a fazer.
+  await pedir({ ref: 'PED-TIMEOUT', sequencia: 'Transferir', campos: { valor: '10' } });
+  const perdida = (await buscar()).status;
+  assert.equal(perdida, 200);
+  db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'PED-TIMEOUT'")
+    .run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+  expirarOrdens();
+  assert.equal((await verOrdem('PED-TIMEOUT')).estado, 'expirada');
+  assert.equal((await buscar()).status, 204, 'expirada não volta à fila');
+
+  // Long-poll: o pedido fica à espera e devolve mal a ordem chegue.
+  const inicio = Date.now();
+  const espera = buscar('?espera=5');
+  setTimeout(() => pedir({ ref: 'PED-TARDE', sequencia: 'Transferir', campos: { valor: '7' } }), 300);
+  const tarde = await espera;
+  assert.equal(tarde.status, 200);
+  assert.equal((await tarde.json()).campos.valor, '7');
+  assert.ok(Date.now() - inicio < 5000, 'devolveu antes do fim da espera');
+
+  // Uma ordem dirigida a um número só sai por esse telemóvel.
+  await pedir({ ref: 'PED-B', sequencia: 'Transferir', campos: { valor: '1' }, numero: '+244 924 111 222' },
+    chaveNova);
+  assert.equal((await buscar()).status, 204, 'o telemóvel do A não leva a ordem do B');
+  assert.equal((await buscar('?numero=924 111 222')).status, 200, 'o do B leva');
+
+  // --- formato do pedido por API ----------------------------------------------
+  // O que o administrador publica é copiado tal e qual pelo programador do
+  // cliente: só é aceite se a API real também o aceitar.
+  const formatoApi = (formato) => admin({ accao: 'formatoApi', id: b, formato });
+  const bomFormato = '{"sequencia":"Transferir","campos":{"iban":"AO06x","valor":"5000"}}';
+
+  assert.equal((await formatoApi(bomFormato)).status, 200);
+  assert.equal(db.prepare('SELECT formato_api FROM clientes WHERE id = ?').get(b).formato_api, bomFormato);
+
+  assert.equal((await formatoApi('sequencia: Transferir')).status, 400, 'não é JSON');
+  assert.equal((await formatoApi('{"campos":{"valor":"1"}}')).status, 400, 'sem sequencia');
+  assert.equal((await formatoApi('{"sequencia":"<script>"}')).status, 400);
+  assert.equal((await formatoApi('{"sequencia":"T","campos":{"valor":"a\\nb"}}')).status, 400);
+  assert.equal((await formatoApi('{"sequencia":"T"}' + 'x'.repeat(500))).status, 400);
+  assert.equal(db.prepare('SELECT formato_api FROM clientes WHERE id = ?').get(b).formato_api,
+    bomFormato, 'nenhum exemplo recusado substituiu o bom');
+
+  // Em branco apaga: a página volta ao exemplo genérico.
+  assert.equal((await formatoApi('  ')).status, 200);
+  assert.equal(db.prepare('SELECT formato_api FROM clientes WHERE id = ?').get(b).formato_api, null);
+  await formatoApi(bomFormato);
+
+  // E um exemplo aceite pelo painel tem mesmo de passar na API real.
+  assert.equal((await pedir({ ref: 'DO-FORMATO', ...JSON.parse(bomFormato) }, chaveNova)).status, 201);
 
   // --- formato do SMS de pedido -----------------------------------------------
   assert.equal((await admin({ accao: 'formato', id: b, formato: 'levantar iban: AO06x valor: 5000' })).status, 200);

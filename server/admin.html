@@ -189,6 +189,8 @@ async function carregar() {
       <td class="accoes">
         <button class="mais" data-menu="m${c.id}" aria-label="Acções de ${esc(c.nome)}">⋯</button>
         <div class="menu" popover id="m${c.id}">
+          <button data-accao="formatoApi" data-id="${c.id}" data-nome="${esc(c.nome)}"
+                  data-formato="${esc(c.formato_api ?? '')}">Formato do pedido por API</button>
           <button data-accao="formato" data-id="${c.id}" data-nome="${esc(c.nome)}"
                   data-formato="${esc(c.formato_sms ?? '')}">Formato do SMS de pedido</button>
           <button data-accao="integracao" data-id="${c.id}">Ver página de integração</button>
@@ -208,10 +210,12 @@ async function carregar() {
 /**
  * O que falta para o programador do cliente poder trabalhar. As duas peças são
  * independentes: sem formato não sabe o que enviar, sem chave não lê o resultado.
+ *
+ * Um formato chega: há duas maneiras de disparar e o cliente só precisa de uma.
  */
 function integracaoDe(c) {
   const falta = [];
-  if (!c.formato_sms) falta.push('formato');
+  if (!c.formato_sms && !c.formato_api) falta.push('formato');
   if (!c.tem_chave) falta.push('chave');
   return falta.length
     ? `<span class="pill aviso"><i></i>falta ${falta.join(' e ')}</span>`
@@ -263,6 +267,16 @@ linhas.onclick = async (e) => {
       `Exemplo do SMS de pedido de ${nome}.\n\n`
       + 'Tem de conter o texto de disparo e os campos que a sequência do telemóvel espera,\n'
       + 'e acabar no último valor. Ex.: levantar iban: AO06...219 valor: 5000',
+      b.dataset.formato);
+    if (formato !== null) await api({ accao, id, formato });
+  } else if (accao === 'formatoApi') {
+    // O corpo do POST que o programador do cliente vai copiar. É validado pelo
+    // mesmo validador do endpoint real, por isso um exemplo aceite aqui funciona
+    // lá. Em branco, a página volta a mostrar o exemplo genérico.
+    const formato = prompt(
+      `Corpo do pedido por API de ${nome}.\n\n`
+      + 'JSON com o nome da sequência do telemóvel e os campos que ela espera.\n'
+      + 'Ex.: {"sequencia":"Transferir","campos":{"iban":"AO06...219","valor":"5000"}}',
       b.dataset.formato);
     if (formato !== null) await api({ accao, id, formato });
   } else if (accao === 'numero') {

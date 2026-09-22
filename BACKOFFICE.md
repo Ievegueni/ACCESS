@@ -52,6 +52,7 @@ transferências em curso.
 | `estado` | `"sucesso"` \| `"falha"` | Ver §3 |
 | `momento` | number | Epoch em milissegundos, **do telemóvel** — ver §4 |
 | `numero` | string *(opcional)* | Número do SIM deste telemóvel. Diz de que cliente é a transferência — ver §2.1 |
+| `ordem_id` | number *(opcional)* | A ordem que deu origem a isto, quando veio por API — ver §8 |
 
 O `numero` **é omitido**, não enviado vazio, quando não está configurado na app:
 assim o servidor distingue "esta app não sabe o seu número" de "sabe e está em
@@ -212,7 +213,87 @@ aviso. Serve para acompanhar e detetar anomalias — não para fechar contas.
 
 ---
 
-## 8. Estado atual
+## 8. Ordens — disparar por API em vez de SMS
+
+O SMS de pedido falha às vezes (é o que o cliente reporta) e não dá resposta: quem
+o envia não sabe se chegou. As ordens substituem **só esse gatilho** — a
+confirmação continua a vir do SMS do operador, que não está nas nossas mãos.
+
+O telemóvel está atrás de NAT em dados móveis: ninguém lhe liga de fora. Por isso
+é ele que pergunta, com long-poll — o servidor segura o pedido até haver ordem.
+Sem FCM: traria uma dependência e uma conta Google para ganhar zero latência, e o
+FCM descarta mensagens em cenários que aqui não se podem descartar.
+
+```
+sistema do cliente ──POST /api/v1/ordens (ak_…)───────> pendente
+telemóvel ──GET /api/telemovel/ordens?espera=25 (token app)─> entregue
+   … USSD … SMS do operador … POST /webhooks/transferencias {ordem_id} ─> concluida
+sistema do cliente ──GET /api/v1/ordens/<ref> ou /api/v1/transferencias
+```
+
+### `POST /api/v1/ordens` — pedir
+
+`Authorization: Bearer ak_…` (a mesma chave da API de leitura).
+
+```json
+{ "ref": "PED-001", "sequencia": "Transferir",
+  "campos": { "valor": "500", "iban": "AO06..." }, "numero": "+244 923 456 789" }
+```
+
+| Campo | Notas |
+|---|---|
+| `ref` | Referência do cliente. `[A-Za-z0-9._-]{1,64}`. **É a idempotência** |
+| `sequencia` | Nome da sequência tal como está configurada na app do telemóvel. O administrador publica-o em ⋯ → **Formato do pedido por API**, validado pelo mesmo validador deste endpoint |
+| `campos` | Entram nos passos como `{valor}`, `{iban}`. Chaves em minúsculas, máx. 10 |
+| `numero` | *Opcional.* Por que telemóvel tem de sair. Sem ele, qualquer um do cliente |
+
+`201` quando é nova, **`200` quando a `ref` já existia** — devolve a que lá está,
+sem criar outra. Repetir o pedido é seguro e é o que se deve fazer quando a
+resposta se perde. Corpo de ambas: `{ref, id, sequencia, campos, estado, tid,
+criado_em, entregue_em}`.
+
+`400` só por payload inválido; `503` por problema nosso. Os campos são validados
+com mão pesada — vão ser escritos numa caixa USSD e mostrados no painel.
+
+### `GET /api/v1/ordens/<ref>` — estado
+
+O mesmo corpo. `estado` é um de:
+
+| Estado | Significa |
+|---|---|
+| `pendente` | à espera que um telemóvel a leve |
+| `entregue` | um telemóvel levou-a e está a marcar |
+| `concluida` | chegou a confirmação; `tid` preenchido |
+| `expirada` | passaram 10 minutos sem confirmação — ver abaixo |
+
+`GET /api/v1/ordens?desde=<id>` lista, paginado por `id`.
+
+### `GET /api/telemovel/ordens` — o telemóvel
+
+`Authorization: Bearer <token da app>` — o mesmo do webhook. Parâmetros `numero`
+(o SIM deste telemóvel, decide de que cliente são as ordens pela regra do §2.1) e
+`espera` (segundos, máx. 25).
+
+Devolve **uma** ordem — `{id, ref, sequencia, campos}` — e marca-a `entregue` no
+mesmo instante, ou `204` ao fim da espera. Uma só porque o telemóvel também só
+corre uma sequência de cada vez. Cliente desativado dá `503`, não `4xx`: o
+telemóvel continua a tentar.
+
+### `expirada` nunca volta a `pendente`
+
+Uma ordem entregue a um telemóvel que depois morre fica `expirada` ao fim de 10
+minutos. **Não é reenviada automaticamente.** A sequência pode ter corrido até ao
+fim e ter-se perdido só o SMS; repetir sozinho seria transferir duas vezes. Quem
+repete é o cliente, com uma `ref` nova, depois de ver o estado.
+
+### O que isto não resolve
+
+- A confirmação continua a depender do SMS do operador. Se os SMS que falham são
+  os *dele*, isto não muda nada — vale a pena saber qual dos dois falha.
+- Sequência mal configurada no telemóvel: a ordem é aceite e nunca executa. O
+  sintoma é `expirada`, mais o "há quanto tempo não chega nada" do §5.
+
+## 9. Estado atual
 
 | Peça | Estado |
 |---|---|
@@ -221,6 +302,9 @@ aviso. Serve para acompanhar e detetar anomalias — não para fechar contas.
 | Fila persistente com limite | ✅ implementada |
 | `POST` com token e HTTPS obrigatório | ✅ implementado |
 | Servidor + painel | ✅ `server/` — Node sem dependências, ver `server/README.md` |
+| Ordens por API (§8) — servidor | ✅ endpoints, idempotência, long-poll, expiração |
+| Ordens por API (§8) — app | ✅ `OrderPoller` no serviço; **falta testar no telemóvel** |
+| Ordens por API (§8) — página dos programadores | ✅ secção 1, em pt e zh |
 | Envio ponta-a-ponta contra um servidor | ⬜ testado com `curl`; **falta a app real** contra um URL HTTPS |
 | Texto do SMS de transferência falhada | ⬜ desconhecido (ver §3) |
 | Reenvio ao voltar a rede | ⬜ só na chegada de SMS ou ao abrir a app |

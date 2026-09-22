@@ -18,23 +18,148 @@
 
 <p class="nota" data-t="dev.intro">
   Para quem programa do lado do cliente. Há duas metades: <b>disparar</b> um
-  levantamento por SMS, e <b>ler</b> as confirmações por API.
+  levantamento — por API, ou por SMS — e <b>ler</b> as confirmações por API.
 </p>
 
 <nav class="indice">
-  <a href="#disparar" data-t="dev.idx1">1 · Disparar</a>
-  <a href="#regras" data-t="dev.idx2">2 · Regras do SMS</a>
-  <a href="#ler" data-t="dev.idx3">3 · Ler as confirmações</a>
-  <a href="#erros" data-t="dev.idx4">4 · Erros</a>
+  <a href="#api" data-t="dev.idx0">1 · Disparar por API</a>
+  <a href="#disparar" data-t="dev.idx1">2 · Disparar por SMS</a>
+  <a href="#regras" data-t="dev.idx2">3 · Regras do SMS</a>
+  <a href="#ler" data-t="dev.idx3">4 · Ler as confirmações</a>
+  <a href="#erros" data-t="dev.idx4">5 · Erros</a>
 </nav>
 
 <!-- 1 -------------------------------------------------------------------- -->
+<section id="api">
+  <h2 data-t="dev.api.h">1 · Disparar por API</h2>
+  <p class="nota" data-t="dev.api.nota">
+    <code>POST /api/v1/ordens</code> — a via recomendada. Ao contrário do SMS,
+    responde: sabem que o pedido foi aceite, podem consultar o estado, e nada se
+    perde no caminho.
+  </p>
+
+  <div class="passos">
+    <div class="passo">
+      <span class="ordem">1</span>
+      <div>
+        <b data-t="dev.api.p1.t">O vosso sistema cria uma ordem</b>
+        <p data-t="dev.api.p1.d">Um <code>POST</code> com a vossa referência e os valores do levantamento.
+           Resposta imediata: <code>201</code>, e a ordem fica em fila.</p>
+      </div>
+    </div>
+    <div class="passo">
+      <span class="ordem">2</span>
+      <div>
+        <b data-t="dev.api.p2.t">O destino recebe-a em segundos</b>
+        <p data-t="dev.api.p2.d">Está permanentemente à espera de trabalho. Não é preciso fazer nada
+           do vosso lado para a entregar.</p>
+      </div>
+    </div>
+    <div class="passo">
+      <span class="ordem">3</span>
+      <div>
+        <b data-t="dev.api.p3.t">A transferência é executada</b>
+        <p data-t="dev.api.p3.d">Do nosso lado. Demora segundos a dezenas de segundos.</p>
+      </div>
+    </div>
+    <div class="passo">
+      <span class="ordem">4</span>
+      <div>
+        <b data-t="dev.api.p4.t">A ordem fecha com o identificador da transação</b>
+        <p data-t="dev.api.p4.d">Consultam o estado pela referência, ou lêem a confirmação pela API da
+           secção 4 — é o mesmo <code>tid</code> nas duas.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 data-t="dev.api.h.chave">Chave</h3>
+  <p class="nota" data-t="dev.api.chave.nota">
+    A mesma chave <code>ak_…</code> da leitura — <a href="#ler">gerem-na na secção 4</a>.
+  </p>
+
+  <h3 data-t="dev.api.h.pedir">Pedir</h3>
+  <pre><code id="exemploOrdem"></code></pre>
+  <div id="formatoApi"></div>
+
+  <table class="parametros">
+    <thead><tr><th data-t="dev.api.campo">Campo</th><th data-t="dev.api.obrig">Obrigatório</th><th data-t="dev.par.notas">Notas</th></tr></thead>
+    <tbody>
+      <tr><td><code>ref</code></td><td data-t="dev.sim">Sim</td>
+          <td data-t="dev.api.c.ref">A vossa referência do levantamento. Letras, dígitos, <code>. _ -</code>, até 64 caracteres</td></tr>
+      <tr><td><code>sequencia</code></td><td data-t="dev.sim">Sim</td>
+          <td data-t="dev.api.c.seq">O nome da operação tal como está configurada no destino. Com outro, a ordem é aceite e nunca executada</td></tr>
+      <tr><td><code>campos</code></td><td data-t="dev.nao">Não</td>
+          <td data-t="dev.api.c.campos">Os valores da operação: <code>valor</code>, <code>iban</code>, … Até 10</td></tr>
+      <tr><td><code>numero</code></td><td data-t="dev.nao">Não</td>
+          <td data-t="dev.api.c.numero">Por que destino tem de sair. Sem ele, qualquer um dos vossos</td></tr>
+    </tbody>
+  </table>
+
+  <h3 data-t="dev.api.h.estado">Consultar o estado</h3>
+  <pre><code id="exemploEstado"></code></pre>
+  <pre><code>{
+  "ref": "PED-001",
+  "id": 17,
+  "sequencia": "Transferir",
+  "campos": { "valor": "5000", "iban": "AO06…219" },
+  "estado": "concluida",
+  "tid": "MP260921.2313.B09562",
+  "criado_em": 1758496380000,
+  "entregue_em": 1758496381204
+}</code></pre>
+
+  <table class="parametros">
+    <thead><tr><th data-t="dev.api.est">Estado</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
+    <tbody>
+      <tr><td><code>pendente</code></td><td data-t="dev.api.s.pendente">Em fila, ainda não foi entregue</td>
+          <td data-t="dev.api.s.pendente.f">Esperar.</td></tr>
+      <tr><td><code>entregue</code></td><td data-t="dev.api.s.entregue">A ser executada neste momento</td>
+          <td data-t="dev.api.s.entregue.f">Esperar.</td></tr>
+      <tr><td><code>concluida</code></td><td data-t="dev.api.s.concluida">Confirmada, com <code>tid</code></td>
+          <td data-t="dev.api.s.concluida.f">Ver o <code>estado</code> da transferência na secção 4.</td></tr>
+      <tr><td><code>expirada</code></td><td data-t="dev.api.s.expirada">Dez minutos sem confirmação</td>
+          <td data-t="dev.api.s.expirada.f">Não repetir às cegas — ler primeiro.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="regra">
+    <b data-t="dev.api.r1.t">A <code>ref</code> é a vossa proteção contra duplicados</b>
+    <p data-t="dev.api.r1.d">Repetir o mesmo <code>POST</code> com a mesma <code>ref</code> devolve a
+       ordem que já existe (<code>200</code> em vez de <code>201</code>) e
+       <b>não</b> transfere outra vez. Se a resposta se perder na vossa rede,
+       repitam à vontade — desde que a <code>ref</code> seja a mesma.</p>
+  </div>
+
+  <div class="regra">
+    <b data-t="dev.api.r2.t">Não precisam de fila do vosso lado</b>
+    <p data-t="dev.api.r2.d">Ao contrário do SMS, podem criar várias ordens seguidas: ficam em fila e
+       são executadas uma de cada vez, pela ordem de chegada.</p>
+  </div>
+
+  <div class="regra perigo">
+    <b data-t="dev.api.r3.t"><code>expirada</code> não é repetida sozinha</b>
+    <p data-t="dev.api.r3.d">Significa que a ordem foi entregue e não chegou confirmação em dez
+       minutos. A operação pode ter corrido até ao fim e ter-se perdido só a
+       confirmação — por isso nunca a repetimos automaticamente. Antes de criar
+       outra ordem, verifiquem na listagem da secção 4 se a transferência
+       aconteceu.</p>
+  </div>
+
+  <div class="regra perigo">
+    <b data-t="dev.api.r4.t">Aceite não quer dizer executada</b>
+    <p data-t="dev.api.r4.d"><code>201</code> diz que a ordem foi registada, nada mais. O resultado só
+       existe quando o estado passa a <code>concluida</code> e traz o
+       <code>tid</code>. Não deem o levantamento por feito antes disso.</p>
+  </div>
+</section>
+
+<!-- 2 -------------------------------------------------------------------- -->
 <section id="disparar">
-  <h2 data-t="dev.h1">1 · Disparar um levantamento</h2>
+  <h2 data-t="dev.h1">2 · Disparar por SMS</h2>
   <p class="nota" data-t="dev.h1.nota">
-    Quando o utilizador final carregar em <b>Levantar</b>, o vosso sistema envia
-    um SMS para o número indicado abaixo. É esse SMS que desencadeia a
-    transferência — não há API para a pedir.
+    A alternativa, para quem já a usa. O vosso sistema envia um SMS para o número
+    indicado abaixo e é esse SMS que desencadeia a transferência. Não responde
+    nada: se o SMS se perder, ninguém fica a saber. Preferir a secção 1.
   </p>
 
   <div class="passos">
@@ -65,7 +190,7 @@
       <div>
         <b data-t="dev.p4.t">A confirmação fica disponível</b>
         <p data-t="dev.p4.d">Com o identificador da transação, o valor e o estado.
-           Lêem-na pela API da secção 3.</p>
+           Lêem-na pela API da secção 4.</p>
       </div>
     </div>
   </div>
@@ -77,9 +202,9 @@
   <div id="formato"></div>
 </section>
 
-<!-- 2 -------------------------------------------------------------------- -->
+<!-- 3 -------------------------------------------------------------------- -->
 <section id="regras">
-  <h2 data-t="dev.h2">2 · Regras do SMS</h2>
+  <h2 data-t="dev.h2">3 · Regras do SMS</h2>
   <p class="nota" data-t="dev.h2.nota">
     Cinco regras. As três primeiras fazem o pedido ser ignorado em silêncio se
     forem quebradas — não há erro nenhum a devolver, o SMS simplesmente não faz nada.
@@ -140,9 +265,9 @@
   </ul>
 </section>
 
-<!-- 3 -------------------------------------------------------------------- -->
+<!-- 4 -------------------------------------------------------------------- -->
 <section id="ler">
-  <h2 data-t="dev.h3">3 · Ler as confirmações</h2>
+  <h2 data-t="dev.h3">4 · Ler as confirmações</h2>
   <p class="nota" data-t="dev.h3.nota">
     <code>GET /api/v1/transferencias</code> — devolve as vossas transferências,
     as mais antigas primeiro, para poderem percorrer tudo sem saltar nada.
@@ -211,17 +336,22 @@
   </div>
 </section>
 
-<!-- 4 -------------------------------------------------------------------- -->
+<!-- 5 -------------------------------------------------------------------- -->
 <section id="erros">
-  <h2 data-t="dev.h4">4 · Erros da API</h2>
+  <h2 data-t="dev.h4">5 · Erros da API</h2>
   <table class="parametros">
     <thead><tr><th data-t="dev.e.codigo">Código</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
     <tbody>
+      <tr><td><code>400</code></td><td data-t="dev.e400">Ordem malformada</td>
+          <td data-t="dev.e400.f">A mensagem diz que campo é. Corrigir e só depois repetir.</td></tr>
       <tr><td><code>401</code></td><td data-t="dev.e401">Chave inválida ou ausente</td>
           <td data-t="dev.e401.f">Verificar o cabeçalho <code>Authorization</code>. Não repetir.</td></tr>
       <tr><td><code>403</code></td><td data-t="dev.e403">Acesso suspenso</td>
           <td data-t="dev.e403.f">Falar com o administrador. Não repetir.</td></tr>
-      <tr><td><code>405</code></td><td data-t="dev.e405">Método errado</td><td data-t="dev.e405.f">Só <code>GET</code>.</td></tr>
+      <tr><td><code>404</code></td><td data-t="dev.e404">Ordem desconhecida</td>
+          <td data-t="dev.e404.f">A <code>ref</code> nunca foi criada. Verificar antes de dar por perdida.</td></tr>
+      <tr><td><code>405</code></td><td data-t="dev.e405">Método errado</td>
+          <td data-t="dev.e405.f"><code>GET</code> para ler, <code>POST</code> para criar ordens.</td></tr>
       <tr><td><code>503</code></td><td data-t="dev.e503">Indisponível de momento</td>
           <td data-t="dev.e503.f">Repetir mais tarde, com espera crescente.</td></tr>
     </tbody>
@@ -240,6 +370,9 @@ aplicarTraducao();   // o i18n já correu antes de o destino do link ser decidid
 montarSeletorIdioma(() => carregar());   // os blocos em JS têm de ser refeitos
 
 const origem = location.origin;
+
+/** O corpo do POST publicado pelo administrador. Null enquanto não existir. */
+let corpoOrdem = null;
 
 async function carregar() {
   const r = await fetch('/api/integracao' + (clienteId ? '?cliente=' + clienteId : ''));
@@ -272,6 +405,17 @@ async function carregar() {
          <p>${t('dev.formato.nenhum.d', 'Peçam-no ao administrador do painel, que o publica aqui.')}</p>
        </div>`;
 
+  // O mesmo princípio do formato do SMS: o nome da sequência e os campos estão
+  // configurados no telemóvel, que o servidor não vê — é o administrador que os
+  // publica aqui. Sem isso, fica o exemplo genérico e o aviso.
+  corpoOrdem = d.formato_api || null;
+  formatoApi.innerHTML = corpoOrdem
+    ? `<p class="nota">${t('dev.api.formato.nota', 'Este é o pedido do vosso caso: copiem e substituam os valores. O nome da sequência tem de ficar como está.')}</p>`
+    : `<div class="regra perigo">
+         <b>${t('dev.api.formato.nenhum.t', 'O pedido acima é genérico')}</b>
+         <p>${t('dev.api.formato.nenhum.d', 'O nome da sequência e os campos do vosso caso ainda não foram publicados. Peçam-nos ao administrador do painel — com outro nome, a ordem é aceite e nunca executada.')}</p>
+       </div>`;
+
   chave.innerHTML = d.tem_chave
     ? `<p class="nota">${t('dev.chave.existe', 'Já existe uma chave. Não é possível voltar a vê-la — se a perderam, gerem outra (a anterior deixa de funcionar de imediato).')}</p>
        <button id="gerar">${t('dev.chave.outra', 'Gerar outra chave')}</button>`
@@ -279,9 +423,30 @@ async function carregar() {
        <button id="gerar" class="principal">${t('dev.chave.gerar', 'Gerar chave')}</button>`;
   document.getElementById('gerar').onclick = gerarChave;
 
+  exemplos(d.tem_chave ? 'ak_a-vossa-chave' : 'ak_…');
+}
+
+/** Os três exemplos de curl, todos com a mesma chave à vista. */
+function exemplos(chave) {
+  const auth = `  -H "Authorization: Bearer ${chave}"`;
   exemploCurl.textContent =
-    `curl -s "${origem}/api/v1/transferencias?desde=0&limite=100" \\\n`
-    + `  -H "Authorization: Bearer ${d.tem_chave ? 'ak_a-vossa-chave' : 'ak_…'}"`;
+    `curl -s "${origem}/api/v1/transferencias?desde=0&limite=100" \\\n` + auth;
+  // O corpo publicado pelo administrador quando existe; senão, um genérico. A
+  // `ref` é sempre nossa — é do pedido, não do formato, e o exemplo tem de a ter.
+  // Os nomes lá dentro não se traduzem: são os que estão no telemóvel.
+  // O parse é defensivo: o servidor já o validou, mas um exemplo estragado não
+  // pode deixar a página em branco.
+  const publicado = corpoOrdem && (() => { try { return JSON.parse(corpoOrdem); } catch { return null; } })();
+  const corpo = publicado
+    ? JSON.stringify({ ref: 'PED-001', ...publicado })
+    : '{"ref":"PED-001","sequencia":"Transferir","campos":{"valor":"5000","iban":"AO06…219"}}';
+  exemploOrdem.textContent =
+    `curl -s -X POST "${origem}/api/v1/ordens" \\\n`
+    + auth + ` \\\n`
+    + `  -H "Content-Type: application/json" \\\n`
+    + `  -d '${corpo}'`;
+  exemploEstado.textContent =
+    `curl -s "${origem}/api/v1/ordens/PED-001" \\\n` + auth;
 }
 
 async function gerarChave() {
@@ -298,9 +463,7 @@ async function gerarChave() {
       <b>${t('dev.chave.titulo', 'Chave de leitura')}</b> — ${t('dev.chave.aviso', 'copiem agora, não volta a ser mostrada.')}
       <dl><dt>Authorization</dt><dd><code>Bearer ${esc(d.chave)}</code></dd></dl>
     </div>`;
-  exemploCurl.textContent =
-    `curl -s "${origem}/api/v1/transferencias?desde=0&limite=100" \\\n`
-    + `  -H "Authorization: Bearer ${d.chave}"`;
+  exemplos(d.chave);
 }
 
 carregar();

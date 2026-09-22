@@ -21,9 +21,11 @@ object SequenceLauncher {
         sequence: Sequence,
         smsValue: String? = null,
         smsFields: Map<String, String> = emptyMap(),
+        /** Ordem da API que mandou correr isto, para a confirmação a poder fechar. */
+        orderId: Int? = null,
     ) {
         // Antes de marcar: a primeira caixa USSD pode aparecer antes de voltarmos aqui.
-        SequenceRunner.start(sequence, smsValue, smsFields)
+        SequenceRunner.start(sequence, smsValue, smsFields, orderId)
         RulesStore.log(context, "${sequence.name} · a marcar ${sequence.dial}")
 
         // Uri.fromParts trata o '#' dos códigos USSD, que numa Uri normal seria

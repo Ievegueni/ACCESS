@@ -38,7 +38,10 @@ class SmsTrigger : BroadcastReceiver() {
         if (confirmation != null) {
             // O número entra no payload agora, não no envio: se for corrigido mais
             // tarde, o que está em fila continua a dizer de onde veio na verdade.
-            WebhookQueue.add(context, confirmation.toJson(WebhookConfig.numero(context)))
+            WebhookQueue.add(
+                context,
+                confirmation.toJson(WebhookConfig.numero(context), SequenceRunner.takeOrderId()),
+            )
             RulesStore.log(
                 context,
                 "confirmação ${if (confirmation.sucesso) "OK" else "FALHA"} · TID ${confirmation.tid}",

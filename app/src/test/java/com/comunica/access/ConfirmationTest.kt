@@ -54,6 +54,16 @@ class ConfirmationTest {
     }
 
     @Test
+    fun `a ordem da API vai no payload e so quando existe`() {
+        // É o que fecha a ordem no painel. Numa transferência disparada por SMS ou
+        // à mão o campo não existe, senão fechava uma ordem que não é esta.
+        val c = Confirmation.parse(real, 1_000L)!!
+        assertTrue(c.toJson(null, 17).contains("\"ordem_id\":17"))
+        assertFalse(c.toJson().contains("ordem_id"))
+        assertFalse(c.toJson("923 456 789").contains("ordem_id"))
+    }
+
+    @Test
     fun `sem numero configurado o campo nao aparece`() {
         // O servidor distingue "não configurado" de "configurado em branco": sem o
         // campo atribui pelo token, com o campo vazio ficaria sem saber a quem dar.

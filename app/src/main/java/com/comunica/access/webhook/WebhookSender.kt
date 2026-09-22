@@ -80,6 +80,17 @@ object WebhookSender {
 
 /** Endpoint do painel. Sem URL configurado não há envio — só fila. */
 data class WebhookConfig(val url: String, val token: String) {
+
+    /**
+     * O painel, sem caminho: `https://painel.exemplo/webhooks/transferencias` →
+     * `https://painel.exemplo`. É a partir daqui que se chega à API de ordens.
+     *
+     * Deduzido em vez de ser mais um campo no ecrã: são o mesmo servidor e o
+     * mesmo token, e duas moradas para configurar seria uma para enganar.
+     */
+    val base: String
+        get() = runCatching { URL(url).let { "${it.protocol}://${it.authority}" } }.getOrDefault(url)
+
     companion object {
         const val KEY_URL = "webhook_url"
         const val KEY_TOKEN = "webhook_token"

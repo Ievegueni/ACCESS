@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.comunica.access.api.OrderPoller
 import com.comunica.access.data.RulesStore
 import com.comunica.access.model.AutomationRule
 
@@ -30,6 +31,9 @@ class AutomationService : AccessibilityService() {
         RulesStore.prefs(this).registerOnSharedPreferenceChangeListener(prefsListener)
         RulesStore.log(this, "Serviço ligado (${rules.size} regras)")
         Log.d(TAG, "Serviço ligado com ${rules.size} regras")
+        // O trigger por API vive aqui porque é este processo que o sistema mantém
+        // ligado — sem serviço de acessibilidade não havia quem executasse a ordem.
+        OrderPoller.start(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -90,6 +94,7 @@ class AutomationService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        OrderPoller.stop()
         RulesStore.prefs(this).unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onDestroy()
     }

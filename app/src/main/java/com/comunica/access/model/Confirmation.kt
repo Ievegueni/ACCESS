@@ -26,13 +26,16 @@ data class Confirmation(
      * É o que permite ao painel saber de que telemóvel veio a transferência. Em
      * branco, o payload sai sem o campo e o servidor atribui pelo token.
      */
-    fun toJson(numero: String? = null): String = JSONObject()
+    fun toJson(numero: String? = null, ordemId: Int? = null): String = JSONObject()
         .put("tid", tid)
         .put("iban_ultimos5", ibanUltimos5)
         .put("valor", valor)
         .put("estado", if (sucesso) "sucesso" else "falha")
         .put("momento", momento)
         .apply { numero?.trim()?.takeIf { it.isNotEmpty() }?.let { put("numero", it) } }
+        // Só quando a transferência veio de uma ordem da API: é o que a fecha no
+        // painel. Omitido, não vazio, nos outros casos.
+        .apply { ordemId?.let { put("ordem_id", it) } }
         .toString()
 
     companion object {

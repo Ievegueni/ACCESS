@@ -26,6 +26,11 @@ node server/test.js                        # parser, validação, dedupe, isolam
    única vez** — no servidor só fica o `sha256`.
 3. Na app desse telemóvel, ecrã **Painel (webhook)**: colar os três.
 4. O cliente entra com o nome e a senha dele e vê só o que é seu.
+5. Menu ⋯ → **Formato do pedido por API**: o corpo do `POST` que o sistema dele
+   vai copiar, com o nome da sequência que configuraste no telemóvel. Sem isto a
+   página de integração só mostra um exemplo genérico, e uma sequência com outro
+   nome faz a ordem ser aceite e nunca executada. (Se o cliente disparar por SMS,
+   é **Formato do SMS de pedido** em vez deste — basta um dos dois.)
 
 ## De quem é cada transferência
 
@@ -100,8 +105,12 @@ fica e deixa de contar para os totais de clientes ativos.
   `503` em falha transitória (nunca `4xx`: a app descarta e o SMS não volta).
 - `/` — painel do cliente; sem sessão mostra o login. `/admin` — gestão (só admin).
 - `/api/transferencias[?cliente=<id>]` — o `cliente=` só é aceite ao admin.
+- `POST /api/v1/ordens` — `Bearer ak_…`, cria uma ordem (trigger por API);
+  `GET /api/v1/ordens/<ref>` dá o estado. Contrato em `../BACKOFFICE.md §8`.
+- `GET /api/telemovel/ordens` — `Bearer <token do cliente>`, long-poll do telemóvel.
 - `/api/clientes` — `GET` lista; `POST` com `accao`
-  `criar` | `numero` | `tirarNumero` | `token` | `senha` | `renomear` | `estado` | `remover`.
+  `criar` | `numero` | `tirarNumero` | `token` | `senha` | `renomear` | `estado` |
+  `formato` | `formatoApi` | `chaveApi` | `remover`.
 - `/api/por-atribuir` — `GET` lista as que vieram de telemóveis desconhecidos;
   `POST {tid, cliente, registarNumero}` resolve-as.
 

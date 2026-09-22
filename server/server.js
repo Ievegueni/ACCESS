@@ -49,6 +49,23 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_cliente_momento ON transferencias(cliente_id, momento DESC);
   CREATE INDEX IF NOT EXISTS idx_numeros_cliente ON numeros(cliente_id);
+  -- Pedidos que o sistema do cliente faz por API, para o telemóvel executar.
+  -- Substitui o SMS de pedido; o SMS de confirmação do operador continua igual.
+  CREATE TABLE IF NOT EXISTS ordens (
+    id          INTEGER PRIMARY KEY,
+    cliente_id  INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+    ref         TEXT NOT NULL,              -- referência do cliente: a idempotência
+    numero      TEXT,                       -- normalizado; null = qualquer telemóvel do cliente
+    sequencia   TEXT NOT NULL,              -- nome da sequência configurada na app
+    campos      TEXT NOT NULL,              -- JSON: {valor, iban, ...} → {valor} nos passos
+    estado      TEXT NOT NULL CHECK (estado IN ('pendente','entregue','concluida','expirada')),
+    tid         TEXT,                       -- preenchido quando a confirmação chega
+    criado_em   INTEGER NOT NULL,
+    entregue_em INTEGER,
+    UNIQUE (cliente_id, ref)
+  );
+  -- O telemóvel consulta isto a cada segundo enquanto espera.
+  CREATE INDEX IF NOT EXISTS idx_ordens_fila ON ordens(cliente_id, estado, id);
 `);
 
 // Colunas acrescentadas depois da primeira versão. `ADD COLUMN` é barato e
@@ -78,6 +95,13 @@ if (!colunasCliente.includes('api_hash')) {
   // O SQLite recusa UNIQUE num ADD COLUMN; o índice a seguir dá a mesma garantia.
   db.exec('ALTER TABLE clientes ADD COLUMN api_hash TEXT');
 }
+if (!colunasCliente.includes('formato_api')) {
+  // O equivalente do formato_sms para o trigger por API: o corpo do POST que o
+  // sistema do cliente tem de enviar, com o nome da sequência e os campos que ela
+  // espera. Vive aqui pela mesma razão — está configurado no telemóvel, que o
+  // servidor não vê, e é o administrador quem sabe o que lá pôs.
+  db.exec('ALTER TABLE clientes ADD COLUMN formato_api TEXT');
+}
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_hash ON clientes(api_hash)');
 
 // --- senhas e tokens -------------------------------------------------------
@@ -99,6 +123,21 @@ function iguais(a, b) {
 }
 
 const hashToken = (t) => createHash('sha256').update(t).digest('hex');
+
+/**
+ * O cliente a quem pertence o segredo do cabeçalho, ou null.
+ *
+ * `coluna` é `token_hash` (o telemóvel, que escreve) ou `api_hash` (o sistema do
+ * cliente, que lê e pede) — literais do nosso código, nunca do pedido.
+ */
+function porChave(req, coluna) {
+  const auth = req.headers.authorization || '';
+  if (!auth.startsWith('Bearer ')) return null;
+  return db.prepare(`SELECT id, nome, ativo FROM clientes WHERE ${coluna} = ?`)
+    .get(hashToken(auth.slice(7)));
+}
+
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Gera um token novo para o cliente. O valor em claro só existe aqui — depois
  *  só fica o hash, por isso perder o token obriga a gerar outro. */
@@ -228,7 +267,7 @@ function registarNumero(clienteId, bruto) {
 /** Valida o payload da app. Devolve {erro} ou {registo}. */
 function validar(corpo) {
   if (!corpo || typeof corpo !== 'object') return { erro: 'corpo não é um objeto' };
-  const { tid, iban_ultimos5, valor, estado, momento, numero } = corpo;
+  const { tid, iban_ultimos5, valor, estado, momento, numero, ordem_id } = corpo;
   if (typeof tid !== 'string' || !TID_VALIDO.test(tid)) return { erro: 'tid inválido' };
   if (estado !== 'sucesso' && estado !== 'falha') return { erro: 'estado inválido' };
   if (!Number.isFinite(momento) || momento <= 0) return { erro: 'momento inválido' };
@@ -243,6 +282,12 @@ function validar(corpo) {
   if (numero != null && !/^[\d+()\-. ]{1,25}$/.test(String(numero))) {
     return { erro: 'numero inválido' };
   }
+  // Só presente quando a sequência foi disparada por API. Um id que não exista ou
+  // já não esteja à espera é ignorado no fecho da ordem — nunca 400: a
+  // transferência aconteceu e o registo dela vale mais do que a ligação à ordem.
+  if (ordem_id != null && (!Number.isInteger(ordem_id) || ordem_id <= 0)) {
+    return { erro: 'ordem_id inválido' };
+  }
   return {
     registo: {
       tid,
@@ -252,9 +297,122 @@ function validar(corpo) {
       estado,
       momento,
       numero_origem: numero == null ? null : String(numero).trim() || null,
+      ordem_id: ordem_id ?? null,
     },
   };
 }
+
+// --- ordens (trigger por API) ----------------------------------------------
+
+/** Depois disto, uma ordem entregue que nunca deu confirmação deixa de contar. */
+const ORDEM_TIMEOUT_MS = 10 * 60 * 1000;
+
+const REF_VALIDA = /^[A-Za-z0-9._\-]{1,64}$/;
+const SEQUENCIA_VALIDA = /^[\p{L}\d .\-_]{1,60}$/u;
+const CAMPO_VALIDO = /^[\p{L}\w]{1,20}$/u;
+// O valor vai ser escrito numa caixa USSD: dígitos, letras e a pontuação que
+// aparece em IBANs, montantes e códigos. Nada de chavetas (são os marcadores dos
+// passos), nada de quebras de linha, nada de HTML — o painel mostra isto.
+const VALOR_VALIDO = /^[\p{L}\d .,:+\-_/@#*]{1,64}$/u;
+
+/** Valida o pedido do sistema do cliente. Devolve {erro} ou {ordem}. */
+function validarOrdem(corpo) {
+  if (!corpo || typeof corpo !== 'object') return { erro: 'corpo não é um objeto' };
+  const { ref, sequencia, campos, numero } = corpo;
+  if (typeof ref !== 'string' || !REF_VALIDA.test(ref)) return { erro: 'ref inválida' };
+  if (typeof sequencia !== 'string' || !SEQUENCIA_VALIDA.test(sequencia)) {
+    return { erro: 'sequencia inválida' };
+  }
+  if (campos != null && (typeof campos !== 'object' || Array.isArray(campos))) {
+    return { erro: 'campos tem de ser um objeto' };
+  }
+  const limpos = {};
+  for (const [chave, valor] of Object.entries(campos || {})) {
+    if (!CAMPO_VALIDO.test(chave)) return { erro: `campo inválido: ${chave}` };
+    if (!VALOR_VALIDO.test(String(valor))) return { erro: `valor inválido em ${chave}` };
+    limpos[chave.toLowerCase()] = String(valor);
+  }
+  if (Object.keys(limpos).length > 10) return { erro: 'campos a mais' };
+  // Sem número, serve qualquer telemóvel do cliente. Com número, tem de ser
+  // aquele — é o que permite a um cliente com vários SIM escolher por onde sai.
+  if (numero != null && !normalizarNumero(numero)) return { erro: 'numero inválido' };
+
+  return {
+    ordem: {
+      ref,
+      sequencia,
+      campos: JSON.stringify(limpos),
+      numero: numero == null ? null : normalizarNumero(numero),
+    },
+  };
+}
+
+/**
+ * Ordem entregue a um telemóvel que nunca deu sinal volta a ser... nada.
+ *
+ * Fica `expirada`, **nunca** outra vez `pendente`: reenviar sozinho uma
+ * transferência que talvez tenha corrido é pior do que não a fazer. Quem repete
+ * é o cliente, com uma `ref` nova, depois de ver o estado.
+ *
+ * ponytail: corre a pedido em vez de num temporizador — sem ordens não há nada a
+ * expirar, e assim não fica um `setInterval` a segurar o processo.
+ */
+function expirarOrdens() {
+  db.prepare(
+    `UPDATE ordens SET estado = 'expirada'
+     WHERE estado = 'entregue' AND entregue_em < ?`
+  ).run(Date.now() - ORDEM_TIMEOUT_MS);
+}
+
+/** Cria, ou devolve a que já existe com a mesma `ref` — o cliente pode repetir. */
+function criarOrdem(clienteId, ordem) {
+  const existente = db.prepare('SELECT * FROM ordens WHERE cliente_id = ? AND ref = ?')
+    .get(clienteId, ordem.ref);
+  if (existente) return { ordem: existente, nova: false };
+
+  const { lastInsertRowid } = db.prepare(
+    `INSERT INTO ordens (cliente_id, ref, numero, sequencia, campos, estado, criado_em)
+     VALUES (?, ?, ?, ?, ?, 'pendente', ?)`
+  ).run(clienteId, ordem.ref, ordem.numero, ordem.sequencia, ordem.campos, Date.now());
+
+  return { ordem: db.prepare('SELECT * FROM ordens WHERE id = ?').get(Number(lastInsertRowid)), nova: true };
+}
+
+/**
+ * Entrega a ordem mais antiga a este telemóvel e marca-a `entregue`.
+ *
+ * Uma de cada vez porque o telemóvel também só corre uma sequência de cada vez.
+ * A marcação vem no mesmo UPDATE condicional que a escolhe: mesmo que dois
+ * telemóveis do mesmo cliente perguntem ao mesmo tempo, só um leva a ordem.
+ */
+function tomarOrdem(clienteId, numeroNormalizado) {
+  expirarOrdens();
+  const ordem = db.prepare(
+    `SELECT * FROM ordens
+     WHERE cliente_id = ? AND estado = 'pendente' AND (numero IS NULL OR numero = ?)
+     ORDER BY id ASC LIMIT 1`
+  ).get(clienteId, numeroNormalizado);
+  if (!ordem) return null;
+
+  const { changes } = db.prepare(
+    "UPDATE ordens SET estado = 'entregue', entregue_em = ? WHERE id = ? AND estado = 'pendente'"
+  ).run(Date.now(), ordem.id);
+  if (!changes) return null;   // outro telemóvel chegou primeiro
+
+  return { id: ordem.id, ref: ordem.ref, sequencia: ordem.sequencia, campos: JSON.parse(ordem.campos) };
+}
+
+/** Como o cliente vê a ordem. Forma pública: mudá-la parte a integração dele. */
+const ordemPublica = (o) => ({
+  ref: o.ref,
+  id: o.id,
+  sequencia: o.sequencia,
+  campos: JSON.parse(o.campos),
+  estado: o.estado,
+  tid: o.tid,
+  criado_em: o.criado_em,
+  entregue_em: o.entregue_em,
+});
 
 // --- consultas -------------------------------------------------------------
 
@@ -313,7 +471,7 @@ const numerosDe = (clienteId) => db.prepare(
 
 function listarClientes() {
   return db.prepare(
-    `SELECT id, nome, ativo, admin, criado_em, formato_sms,
+    `SELECT id, nome, ativo, admin, criado_em, formato_sms, formato_api,
             api_hash IS NOT NULL AS tem_chave
      FROM clientes ORDER BY admin, nome`
   ).all().map((c) => ({ ...c, numeros: numerosDe(c.id), ...resumo(c.id) }));
@@ -433,10 +591,7 @@ async function tratar(req, res) {
 
   // 1. Webhook da app — autenticado pelo token do cliente, não por sessão.
   if (req.method === 'POST' && url.pathname === '/webhooks/transferencias') {
-    const auth = req.headers.authorization || '';
-    const cliente = auth.startsWith('Bearer ')
-      ? db.prepare('SELECT id, ativo FROM clientes WHERE token_hash = ?').get(hashToken(auth.slice(7)))
-      : null;
+    const cliente = porChave(req, 'token_hash');
     if (!cliente) return json(res, 401, { erro: 'token inválido' });
     // Cliente desativado é uma decisão nossa e reversível: 503 para a app manter
     // em fila. Com 401 (4xx) ela descartava, e o SMS não volta a chegar (§4).
@@ -459,6 +614,17 @@ async function tratar(req, res) {
       ).run(registo.tid, clienteId, registo.iban_ultimos5, registo.valor_texto,
             registo.valor, registo.estado, registo.momento, recebidoEmUnico(),
             registo.numero_origem, por);
+
+      // Fecha a ordem que originou esta transferência, se veio por API. Do mesmo
+      // cliente a quem a transferência foi atribuída — é por esse que o telemóvel
+      // pede ordens — e só se ainda estava à espera: um `ordem_id` velho ou de
+      // outro cliente é ignorado, nunca um erro — o registo já está gravado.
+      if (registo.ordem_id) {
+        db.prepare(
+          `UPDATE ordens SET estado = 'concluida', tid = ?
+           WHERE id = ? AND cliente_id = ? AND estado = 'entregue'`
+        ).run(registo.tid, registo.ordem_id, clienteId);
+      }
       return json(res, 200, { ok: true });
     } catch (e) {
       // Nunca 4xx por problema nosso: a app apaga da fila e o SMS não volta.
@@ -470,10 +636,7 @@ async function tratar(req, res) {
   // 1.1 API de leitura, para o sistema do cliente. Sem sessão: autentica-se com
   //     a chave dele, tem de funcionar a partir de um servidor.
   if (url.pathname === '/api/v1/transferencias') {
-    const auth = req.headers.authorization || '';
-    const cliente = auth.startsWith('Bearer ')
-      ? db.prepare('SELECT id, nome, ativo FROM clientes WHERE api_hash = ?').get(hashToken(auth.slice(7)))
-      : null;
+    const cliente = porChave(req, 'api_hash');
     if (!cliente) return json(res, 401, { erro: 'chave inválida' });
     if (!cliente.ativo) return json(res, 403, { erro: 'cliente desativado' });
     if (req.method !== 'GET') return json(res, 405, { erro: 'só GET' });
@@ -510,6 +673,78 @@ async function tratar(req, res) {
       proximo_desde: itens.length ? itens[itens.length - 1].recebido_em : desde,
       ha_mais: itens.length === limite,
     });
+  }
+
+  // 1.2 Pedir uma transferência por API, em vez de por SMS. Mesma chave da
+  //     leitura: é o mesmo sistema do cliente a falar connosco.
+  if (url.pathname === '/api/v1/ordens' || url.pathname.startsWith('/api/v1/ordens/')) {
+    const cliente = porChave(req, 'api_hash');
+    if (!cliente) return json(res, 401, { erro: 'chave inválida' });
+    if (!cliente.ativo) return json(res, 403, { erro: 'cliente desativado' });
+    expirarOrdens();
+
+    // Estado de uma ordem, pela referência que o cliente escolheu.
+    if (req.method === 'GET' && url.pathname !== '/api/v1/ordens') {
+      const ref = decodeURIComponent(url.pathname.slice('/api/v1/ordens/'.length));
+      const o = db.prepare('SELECT * FROM ordens WHERE cliente_id = ? AND ref = ?').get(cliente.id, ref);
+      return o ? json(res, 200, ordemPublica(o)) : json(res, 404, { erro: 'ordem não existe' });
+    }
+
+    if (req.method === 'GET') {
+      const desde = Number(url.searchParams.get('desde')) || 0;
+      const itens = db.prepare(
+        'SELECT * FROM ordens WHERE cliente_id = ? AND id > ? ORDER BY id ASC LIMIT 100'
+      ).all(cliente.id, desde);
+      return json(res, 200, {
+        itens: itens.map(ordemPublica),
+        proximo_desde: itens.length ? itens[itens.length - 1].id : desde,
+      });
+    }
+
+    if (req.method !== 'POST') return json(res, 405, { erro: 'só GET ou POST' });
+
+    const { erro, ordem } = validarOrdem(JSON.parse(await corpoDe(req, 4096)));
+    if (erro) return json(res, 400, { erro });
+
+    // Repetir com a mesma `ref` devolve a ordem que já existe, sem criar outra:
+    // um cliente que não recebeu a resposta pode tentar de novo sem transferir
+    // duas vezes. 201 quando é nova, 200 quando já lá estava.
+    const { ordem: guardada, nova } = criarOrdem(cliente.id, ordem);
+    return json(res, nova ? 201 : 200, ordemPublica(guardada));
+  }
+
+  // 1.3 O telemóvel pergunta se há trabalho. Autentica-se com o token da app,
+  //     o mesmo do webhook — é o mesmo telemóvel, não vale a pena outro segredo.
+  //
+  //     Long-poll: o servidor segura o pedido até haver ordem ou até `espera`
+  //     segundos. Sem isto era ou um pedido por segundo (bateria) ou minutos de
+  //     atraso numa transferência. Não há push porque o telemóvel está atrás de
+  //     NAT em dados móveis — ninguém lhe liga de fora.
+  if (url.pathname === '/api/telemovel/ordens') {
+    const cliente = porChave(req, 'token_hash');
+    if (!cliente) return json(res, 401, { erro: 'token inválido' });
+    // Desativar é decisão nossa e reversível: 503 para o telemóvel continuar a
+    // tentar, tal como no webhook.
+    if (!cliente.ativo) return json(res, 503, { erro: 'cliente desativado' });
+    if (req.method !== 'GET') return json(res, 405, { erro: 'só GET' });
+
+    // Mesma regra do webhook: quem está ao pé do SIM é quem sabe de que cliente
+    // é este telemóvel. Assim um telemóvel registado noutro cliente recebe as
+    // ordens desse, e não as do dono do token.
+    const numero = normalizarNumero(url.searchParams.get('numero'));
+    const { clienteId } = atribuir(url.searchParams.get('numero'), cliente.id);
+
+    const espera = Math.min(Math.max(Number(url.searchParams.get('espera')) || 0, 0), 25);
+    const ate = Date.now() + espera * 1000;
+    for (;;) {
+      const ordem = tomarOrdem(clienteId, numero);
+      if (ordem) return json(res, 200, ordem);
+      if (req.destroyed || Date.now() >= ate) break;
+      await dormir(1000);
+    }
+    if (req.destroyed) return;          // o telemóvel desistiu: não há a quem responder
+    res.writeHead(204);                 // 204 não leva corpo
+    return res.end();
   }
 
   // 2. Login.
@@ -582,11 +817,14 @@ async function tratar(req, res) {
     const pedido = Number(url.searchParams.get('cliente'));
     if (!sessao.admin && pedido && pedido !== sessao.id) return json(res, 403, { erro: 'sem permissão' });
     const alvo = sessao.admin && pedido ? pedido : sessao.id;
-    const c = db.prepare('SELECT nome, formato_sms, api_hash IS NOT NULL AS tem_chave FROM clientes WHERE id = ?').get(alvo);
+    const c = db.prepare(
+      'SELECT nome, formato_sms, formato_api, api_hash IS NOT NULL AS tem_chave FROM clientes WHERE id = ?'
+    ).get(alvo);
     if (!c) return json(res, 404, { erro: 'cliente não existe' });
     return json(res, 200, {
       cliente: c.nome,
       formato_sms: c.formato_sms,
+      formato_api: c.formato_api,
       tem_chave: !!c.tem_chave,
       numeros: numerosDe(alvo),
     });
@@ -740,6 +978,26 @@ async function tratar(req, res) {
         return json(res, 200, { ok: true });
       }
 
+      if (p.accao === 'formatoApi') {
+        const exemplo = String(p.formato ?? '').trim();
+        if (!exemplo) {
+          db.prepare('UPDATE clientes SET formato_api = NULL WHERE id = ?').run(alvo.id);
+          return json(res, 200, { ok: true });
+        }
+        if (exemplo.length > 500) return json(res, 400, { erro: 'exemplo demasiado longo' });
+
+        // Validado pelo mesmo validador do endpoint real, com uma ref de mentira:
+        // um exemplo que o painel aceitasse mas a API recusasse seria pior do que
+        // não ter exemplo nenhum — o programador do cliente copia-o tal e qual.
+        const corpo = (() => { try { return JSON.parse(exemplo); } catch { return null; } })();
+        if (!corpo) return json(res, 400, { erro: 'não é JSON válido' });
+        const { erro } = validarOrdem({ ...corpo, ref: 'EXEMPLO' });
+        if (erro) return json(res, 400, { erro });
+
+        db.prepare('UPDATE clientes SET formato_api = ? WHERE id = ?').run(exemplo, alvo.id);
+        return json(res, 200, { ok: true });
+      }
+
       if (p.accao === 'chaveApi') return json(res, 200, { chave: novaChaveApi(alvo.id) });
 
       if (p.accao === 'numero') {
@@ -790,4 +1048,5 @@ if (require.main === module) {
 module.exports = {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, db, server,
+  validarOrdem, criarOrdem, tomarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
 };

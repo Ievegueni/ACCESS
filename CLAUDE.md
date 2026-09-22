@@ -23,6 +23,8 @@ app/src/main/
 │   ├── MainActivity.kt              # ecrã de configuração/status
 │   ├── ui/
 │   │   └── MainScreen.kt            # Compose UI
+│   ├── api/
+│   │   └── OrderPoller.kt           # long-poll ao painel: trigger por API (BACKOFFICE §8)
 │   ├── accessibility/
 │   │   ├── AutomationService.kt     # extends AccessibilityService
 │   │   ├── NodeFinder.kt            # localizar nós por texto/ID
@@ -167,6 +169,10 @@ Ver `SPRINTS.md` para o plano faseado.
    ver nota no `RulesStore`: o serviço precisa de leitura síncrona em callbacks)
 5. ✅ Sequências USSD (marcar + responder aos menus por ordem)
 
-Por fazer: salvaguarda para quando um menu USSD chega fora de ordem ou demora
-demais — hoje a sequência responde à caixa que aparecer. Irrelevante em consultas,
-importante em transferências.
+6. ✅ Trigger por API (long-poll) — servidor e app; ver `BACKOFFICE.md §8`
+
+Por fazer: salvaguarda para quando um menu USSD chega fora de ordem — hoje a
+sequência responde à caixa que aparecer. Irrelevante em consultas, importante em
+transferências. A parte do "demora demais" já está: `SequenceRunner.running`
+passa a false ao fim de 5 minutos, senão uma sequência pendurada engolia os SMS
+seguintes e bloqueava as ordens da API para sempre.
