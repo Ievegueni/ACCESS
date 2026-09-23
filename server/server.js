@@ -6,7 +6,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { timingSafeEqual, randomBytes, scryptSync, createHash } = require('node:crypto');
+const { timingSafeEqual, randomBytes, scryptSync, createHash, createHmac } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -122,6 +122,16 @@ if (!colunasCliente.includes('formato_api')) {
   db.exec('ALTER TABLE clientes ADD COLUMN formato_api TEXT');
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_hash ON clientes(api_hash)');
+
+const colunasOrdens = db.prepare('PRAGMA table_info(ordens)').all().map((c) => c.name);
+if (!colunasOrdens.includes('notify_url')) {
+  // Callback para o sistema do cliente quando a ordem fecha — pediu-o para não
+  // ter de consultar o estado em ciclo. `notif_proxima` null = nada a enviar.
+  db.exec(`ALTER TABLE ordens ADD COLUMN notify_url TEXT;
+           ALTER TABLE ordens ADD COLUMN notif_tentativas INTEGER NOT NULL DEFAULT 0;
+           ALTER TABLE ordens ADD COLUMN notif_proxima INTEGER`);
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_ordens_notif ON ordens(notif_proxima) WHERE notif_proxima IS NOT NULL');
 
 // --- senhas e tokens -------------------------------------------------------
 
@@ -342,7 +352,7 @@ const VALOR_VALIDO = /^[\p{L}\d .,:+\-_/@#*]{1,64}$/u;
 /** Valida o pedido do sistema do cliente. Devolve {erro} ou {ordem}. */
 function validarOrdem(corpo) {
   if (!corpo || typeof corpo !== 'object') return { erro: 'corpo não é um objeto' };
-  const { ref, sequencia, campos, numero } = corpo;
+  const { ref, sequencia, campos, numero, notify_url } = corpo;
   if (typeof ref !== 'string' || !REF_VALIDA.test(ref)) return { erro: 'ref inválida' };
   if (typeof sequencia !== 'string' || !SEQUENCIA_VALIDA.test(sequencia)) {
     return { erro: 'sequencia inválida' };
@@ -360,6 +370,7 @@ function validarOrdem(corpo) {
   // Sem número, serve qualquer telemóvel do cliente. Com número, tem de ser
   // aquele — é o que permite a um cliente com vários SIM escolher por onde sai.
   if (numero != null && !normalizarNumero(numero)) return { erro: 'numero inválido' };
+  if (notify_url != null && !urlNotificacaoValida(notify_url)) return { erro: 'notify_url inválido' };
 
   return {
     ordem: {
@@ -367,8 +378,25 @@ function validarOrdem(corpo) {
       sequencia,
       campos: JSON.stringify(limpos),
       numero: numero == null ? null : normalizarNumero(numero),
+      notify_url: notify_url ?? null,
     },
   };
+}
+
+/**
+ * Só HTTPS: o corpo leva o estado de uma transferência. Também corta o grosso do
+ * SSRF — um serviço interno raramente tem certificado válido.
+ * ponytail: não resolve o DNS para recusar IPs privados; acrescentar se houver
+ * serviços internos com HTTPS na mesma máquina.
+ */
+function urlNotificacaoValida(u) {
+  if (typeof u !== 'string' || u.length > 500) return false;
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -378,14 +406,74 @@ function validarOrdem(corpo) {
  * transferência que talvez tenha corrido é pior do que não a fazer. Quem repete
  * é o cliente, com uma `ref` nova, depois de ver o estado.
  *
- * ponytail: corre a pedido em vez de num temporizador — sem ordens não há nada a
- * expirar, e assim não fica um `setInterval` a segurar o processo.
+ * Corre a pedido e também num temporizador (ver o fim do ficheiro): com o
+ * `notify_url` o cliente deixa de consultar, e um telemóvel morto também não
+ * pergunta — sem o temporizador, a expiração nunca chegava a ser notificada.
  */
 function expirarOrdens() {
-  db.prepare(
-    `UPDATE ordens SET estado = 'expirada'
+  const { changes } = db.prepare(
+    `UPDATE ordens SET estado = 'expirada',
+       notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
      WHERE estado = 'entregue' AND entregue_em < ?`
-  ).run(Date.now() - ORDEM_TIMEOUT_MS);
+  ).run(Date.now(), Date.now() - ORDEM_TIMEOUT_MS);
+  if (changes) notificarPendentes();
+}
+
+// --- notify_url: avisar o sistema do cliente quando a ordem fecha -----------
+
+/** Tentativas com espera a dobrar desde 30 s: cobre ~2 h de servidor em baixo. */
+const NOTIF_MAX_TENTATIVAS = 8;
+const NOTIF_BASE_MS = 30 * 1000;
+const aNotificar = new Set();   // ids em voo: o temporizador e o fecho não enviam duas vezes
+
+/**
+ * POST de `ordemPublica` para o `notify_url`, assinado com HMAC-SHA256 do corpo.
+ * A chave da assinatura é o sha256 (hex) da chave `ak_` do cliente — ele tem a
+ * chave, nós só o hash, e assim não há segundo segredo a gerir.
+ *
+ * Entrega pelo menos uma vez: se a resposta dele se perder, repete. O cliente
+ * trata o callback como idempotente, pela `ref`.
+ */
+async function notificar(o) {
+  if (aNotificar.has(o.id)) return;
+  aNotificar.add(o.id);
+  try {
+    const corpo = JSON.stringify(ordemPublica(o));
+    let ok = false;
+    try {
+      const r = await fetch(o.notify_url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Assinatura': createHmac('sha256', o.api_hash || '').update(corpo).digest('hex'),
+        },
+        body: corpo,
+        redirect: 'manual',              // um 3xx para http:// ou para dentro não é seguido
+        signal: AbortSignal.timeout(10000),
+      });
+      ok = r.status >= 200 && r.status < 300;
+    } catch { /* rede, DNS, timeout: conta como falha */ }
+
+    const tentativas = o.notif_tentativas + 1;
+    const proxima = ok || tentativas >= NOTIF_MAX_TENTATIVAS
+      ? null
+      : Date.now() + NOTIF_BASE_MS * 2 ** (tentativas - 1);
+    db.prepare('UPDATE ordens SET notif_tentativas = ?, notif_proxima = ? WHERE id = ?')
+      .run(tentativas, proxima, o.id);
+    // Nunca o corpo nem o URL completo no log: são dados do cliente.
+    if (!ok) console.error(`notify_url falhou: ordem ${o.id}, tentativa ${tentativas}`);
+  } finally {
+    aNotificar.delete(o.id);
+  }
+}
+
+/** Envia o que está em atraso. Devolve a promessa para os testes esperarem. */
+function notificarPendentes() {
+  const devidas = db.prepare(
+    `SELECT o.*, c.api_hash FROM ordens o JOIN clientes c ON c.id = o.cliente_id
+     WHERE o.notif_proxima IS NOT NULL AND o.notif_proxima <= ? LIMIT 50`
+  ).all(Date.now());
+  return Promise.all(devidas.map(notificar));
 }
 
 /** Cria, ou devolve a que já existe com a mesma `ref` — o cliente pode repetir. */
@@ -395,9 +483,10 @@ function criarOrdem(clienteId, ordem) {
   if (existente) return { ordem: existente, nova: false };
 
   const { lastInsertRowid } = db.prepare(
-    `INSERT INTO ordens (cliente_id, ref, numero, sequencia, campos, estado, criado_em)
-     VALUES (?, ?, ?, ?, ?, 'pendente', ?)`
-  ).run(clienteId, ordem.ref, ordem.numero, ordem.sequencia, ordem.campos, Date.now());
+    `INSERT INTO ordens (cliente_id, ref, numero, sequencia, campos, estado, criado_em, notify_url)
+     VALUES (?, ?, ?, ?, ?, 'pendente', ?, ?)`
+  ).run(clienteId, ordem.ref, ordem.numero, ordem.sequencia, ordem.campos, Date.now(),
+        ordem.notify_url);
 
   return { ordem: db.prepare('SELECT * FROM ordens WHERE id = ?').get(Number(lastInsertRowid)), nova: true };
 }
@@ -684,10 +773,12 @@ async function tratar(req, res) {
       // pede ordens — e só se ainda estava à espera: um `ordem_id` velho ou de
       // outro cliente é ignorado, nunca um erro — o registo já está gravado.
       if (registo.ordem_id) {
-        db.prepare(
-          `UPDATE ordens SET estado = 'concluida', tid = ?
+        const { changes } = db.prepare(
+          `UPDATE ordens SET estado = 'concluida', tid = ?,
+             notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
            WHERE id = ? AND cliente_id = ? AND estado = 'entregue'`
-        ).run(registo.tid, registo.ordem_id, clienteId);
+        ).run(registo.tid, Date.now(), registo.ordem_id, clienteId);
+        if (changes) notificarPendentes();   // sem await: o telemóvel não espera pelo cliente
       }
       return json(res, 200, { ok: true });
     } catch (e) {
@@ -1107,10 +1198,14 @@ const server = http.createServer((req, res) => {
 
 if (require.main === module) {
   server.listen(PORT, () => console.log(`Painel em http://localhost:${PORT}`));
+  // Expira ordens de telemóveis mortos e repete callbacks falhados. `unref`: não
+  // é isto que segura o processo.
+  setInterval(() => { expirarOrdens(); notificarPendentes(); }, NOTIF_BASE_MS).unref();
 }
 
 module.exports = {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db, server,
   validarOrdem, criarOrdem, tomarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
+  notificarPendentes, NOTIF_MAX_TENTATIVAS,
 };

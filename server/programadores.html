@@ -92,6 +92,8 @@
           <td data-t="dev.api.c.campos">Os valores da operação: <code>valor</code>, <code>iban</code>, … Até 10</td></tr>
       <tr><td><code>numero</code></td><td data-t="dev.nao">Não</td>
           <td data-t="dev.api.c.numero">Por que destino tem de sair. Sem ele, qualquer um dos vossos</td></tr>
+      <tr><td><code>notify_url</code></td><td data-t="dev.nao">Não</td>
+          <td data-t="dev.api.c.notify">URL <code>https://</code> vosso. Quando a ordem fica <code>concluida</code> ou <code>expirada</code>, fazemos-lhe um <code>POST</code> com o mesmo corpo da consulta de estado</td></tr>
     </tbody>
   </table>
 
@@ -128,6 +130,19 @@
        ordem que já existe (<code>200</code> em vez de <code>201</code>) e
        <b>não</b> transfere outra vez. Se a resposta se perder na vossa rede,
        repitam à vontade — desde que a <code>ref</code> seja a mesma.</p>
+  </div>
+
+  <div class="regra">
+    <b data-t="dev.api.r5.t">Com <code>notify_url</code> não precisam de consultar o estado</b>
+    <p data-t="dev.api.r5.d">Respondam <code>2xx</code> para confirmar a receção. Com outra resposta,
+       ou sem resposta em 10 s, repetimos com espera a dobrar desde 30 s, até 8 vezes
+       (cerca de 2 h). Podem receber o mesmo aviso mais de uma vez: tratem-no pela
+       <code>ref</code>. O cabeçalho <code>X-Assinatura</code> é o HMAC-SHA256 (hex) do
+       corpo, com chave igual ao SHA-256 (hex) da vossa chave <code>ak_</code> — verifiquem-no
+       antes de confiar no conteúdo.</p>
+    <pre><code>const segredo = crypto.createHash('sha256').update(CHAVE_AK).digest('hex');
+const esperado = crypto.createHmac('sha256', segredo).update(corpoBruto).digest('hex');
+if (esperado !== req.headers['x-assinatura']) return res.status(401).end();</code></pre>
   </div>
 
   <div class="regra">

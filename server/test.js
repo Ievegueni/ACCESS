@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db,
-  validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS,
+  validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, notificarPendentes, NOTIF_MAX_TENTATIVAS,
 } = require('./server.js');
 
 // --- formato angolano: ponto é milhares, vírgula é decimal -----------------
@@ -427,6 +427,62 @@ server.listen(0, async () => {
     chaveNova);
   assert.equal((await buscar()).status, 204, 'o telemóvel do A não leva a ordem do B');
   assert.equal((await buscar('?numero=924 111 222')).status, 200, 'o do B leva');
+
+  // --- notify_url: o painel avisa o cliente quando a ordem fecha ----------------
+  assert.equal((await pedir({ ...base, ref: 'N-0', notify_url: 'http://cliente.exemplo/cb' })).status, 400,
+    'só https');
+  assert.equal((await pedir({ ...base, ref: 'N-0', notify_url: 'isto não é url' })).status, 400);
+
+  // O fetch do servidor é o mesmo deste processo: intercepta só o URL do cliente.
+  const fetchReal = globalThis.fetch;
+  const avisos = [];
+  let respostaCliente = 500;
+  globalThis.fetch = async (u, opts) => {
+    if (!String(u).startsWith('https://cliente.exemplo/')) return fetchReal(u, opts);
+    avisos.push({ corpo: opts.body, assinatura: opts.headers['X-Assinatura'] });
+    return new Response(null, { status: respostaCliente });
+  };
+  try {
+    // Ninguém é avisado de nada pendente — só quando fecha.
+    await pedir({ ...base, ref: 'N-1', campos: { valor: '3' }, notify_url: 'https://cliente.exemplo/cb' });
+    const tn = await (await buscar()).json();
+    await notificarPendentes();
+    assert.equal(avisos.length, 0, 'entregue ainda não é fim');
+
+    // Concluída: o aviso sai logo, com a assinatura que o cliente sabe calcular.
+    respostaCliente = 200;
+    assert.equal(await envia(t2, { ...bom, tid: 'NOT111.0001', ordem_id: tn.id }), 200);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(avisos.length, 1);
+    const aviso = JSON.parse(avisos[0].corpo);
+    assert.equal(aviso.ref, 'N-1');
+    assert.equal(aviso.estado, 'concluida');
+    assert.equal(aviso.tid, 'NOT111.0001');
+    const { createHash, createHmac } = require('node:crypto');
+    const segredo = createHash('sha256').update(chaveA).digest('hex');
+    assert.equal(avisos[0].assinatura, createHmac('sha256', segredo).update(avisos[0].corpo).digest('hex'));
+    await notificarPendentes();
+    assert.equal(avisos.length, 1, 'aceite uma vez, não repete');
+
+    // Cliente em baixo: tenta de novo quando chega a hora, e desiste ao fim do limite.
+    respostaCliente = 503;
+    await pedir({ ...base, ref: 'N-2', campos: { valor: '4' }, notify_url: 'https://cliente.exemplo/cb' });
+    await buscar();
+    db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'N-2'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+    expirarOrdens();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(JSON.parse(avisos.at(-1).corpo).estado, 'expirada', 'a expiração também avisa');
+    const antes = avisos.length;
+    await notificarPendentes();
+    assert.equal(avisos.length, antes, 'não repete antes da hora');
+    for (let i = 0; i < NOTIF_MAX_TENTATIVAS + 2; i++) {
+      db.prepare("UPDATE ordens SET notif_proxima = 0 WHERE ref = 'N-2' AND notif_proxima IS NOT NULL").run();
+      await notificarPendentes();
+    }
+    assert.equal(avisos.length - antes + 1, NOTIF_MAX_TENTATIVAS, 'desiste ao fim do limite');
+  } finally {
+    globalThis.fetch = fetchReal;
+  }
 
   // --- formato do pedido por API ----------------------------------------------
   // O que o administrador publica é copiado tal e qual pelo programador do

@@ -284,6 +284,7 @@ sistema do cliente ──GET /api/v1/ordens/<ref> ou /api/v1/transferencias
 | `sequencia` | Nome da sequência tal como está configurada na app do telemóvel. O administrador publica-o em ⋯ → **Formato do pedido por API**, validado pelo mesmo validador deste endpoint |
 | `campos` | Entram nos passos como `{valor}`, `{iban}`. Chaves em minúsculas, máx. 10 |
 | `numero` | *Opcional.* Por que telemóvel tem de sair. Sem ele, qualquer um do cliente |
+| `notify_url` | *Opcional.* `https://` do cliente, avisado quando a ordem fecha — ver abaixo |
 
 `201` quando é nova, **`200` quando a `ref` já existia** — devolve a que lá está,
 sem criar outra. Repetir o pedido é seguro e é o que se deve fazer quando a
@@ -317,6 +318,23 @@ mesmo instante, ou `204` ao fim da espera. Uma só porque o telemóvel também s
 corre uma sequência de cada vez. Cliente desativado dá `503`, não `4xx`: o
 telemóvel continua a tentar.
 
+### `notify_url` — o painel avisa o cliente
+
+Pedido do cliente: consultar o estado em ciclo não escala. Quando a ordem passa a
+`concluida` ou `expirada`, o painel faz `POST` ao `notify_url` com o mesmo corpo
+do `GET /api/v1/ordens/<ref>`.
+
+- **Assinatura:** `X-Assinatura` = HMAC-SHA256 hex do corpo, com chave
+  `sha256hex(ak_…)`. O servidor só guarda o hash da chave, e é exatamente esse o
+  segredo — não há segundo segredo a gerir. Trocar a chave troca a assinatura.
+- **Pelo menos uma vez:** só `2xx` conta. Falha → repete com espera a dobrar desde
+  30 s, 8 tentativas (~2 h), persistido em `notif_proxima`/`notif_tentativas` —
+  sobrevive a reinícios. Depois disso desiste; o `GET` continua a funcionar.
+- **Só HTTPS, sem seguir redirects:** corta o grosso do SSRF. Não resolve o DNS
+  para recusar IPs privados (marcado `ponytail:` no `urlNotificacaoValida`).
+- A expiração passou a correr também num `setInterval` de 30 s: sem ninguém a
+  consultar, uma ordem num telemóvel morto nunca expirava nem era avisada.
+
 ### `expirada` nunca volta a `pendente`
 
 Uma ordem entregue a um telemóvel que depois morre fica `expirada` ao fim de 10
@@ -343,6 +361,7 @@ repete é o cliente, com uma `ref` nova, depois de ver o estado.
 | Ordens por API (§8) — servidor | ✅ endpoints, idempotência, long-poll, expiração |
 | Ordens por API (§8) — app | ✅ `OrderPoller` no serviço; **falta testar no telemóvel** |
 | Ordens por API (§8) — página dos programadores | ✅ secção 1, em pt e zh |
+| `notify_url` nas ordens (§8) | ✅ callback assinado, com novas tentativas; **falta testar contra o sistema do cliente** |
 | Carteiras por telemóvel (§5.1) | ✅ saldo e silêncio por número, no painel |
 | Saldo depois de um carregamento | ⬜ só atualiza na transferência seguinte — o SMS de carregamento ainda não foi visto |
 | Envio ponta-a-ponta contra um servidor | ⬜ testado com `curl`; **falta a app real** contra um URL HTTPS |
