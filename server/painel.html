@@ -28,6 +28,24 @@
 
 <section class="carteiras" id="carteiras" aria-label="Carteiras" hidden></section>
 
+<section class="ordens" id="ordens" hidden>
+  <h2 data-t="ord.titulo">Ordens por API</h2>
+  <div class="tabela">
+    <table>
+      <thead><tr>
+        <th data-t="ord.col.criada">Criada</th>
+        <th data-t="ord.col.ref">Referência</th>
+        <th class="num" data-t="col.valor">Valor</th>
+        <th class="num" data-t="col.iban">IBAN ·····</th>
+        <th data-t="col.estado">Estado</th>
+        <th data-t="col.tid">TID</th>
+        <th data-t="ord.col.aviso">Callback</th>
+      </tr></thead>
+      <tbody id="linhasOrdens"></tbody>
+    </table>
+  </div>
+</section>
+
 <form class="barra" id="filtros">
   <label class="campo">
     <span data-t="filtro.estado">Estado</span>
@@ -72,9 +90,13 @@ montarSeletorIdioma(() => carregar());   // recarrega o que é construído em JS
 async function carregar() {
   const params = new URLSearchParams([...new FormData(filtros)].filter(([, v]) => v));
   if (clienteId) params.set('cliente', clienteId);
-  const r = await fetch('/api/transferencias?' + params);
+  const [r, ro] = await Promise.all([
+    fetch('/api/transferencias?' + params),
+    fetch('/api/ordens' + (clienteId ? '?cliente=' + encodeURIComponent(clienteId) : '')),
+  ]);
   if (r.status === 401) return location.assign('/');   // sessão caiu
   const d = await r.json();
+  const o = ro.ok ? await ro.json() : { itens: [], falhadas: 0 };
 
   quem.textContent = d.cliente;
   document.title = `${d.cliente} · ${t('painel.titulo', 'Transferências')}`;
@@ -95,7 +117,22 @@ async function carregar() {
     + estatistica(t('est.24h', 'Últimas 24 h'), montante(d.dia.v))
     + estatistica(t('est.30d', 'Últimos 30 dias'), montante(d.mes.v))
     + estatistica(t('est.rever', 'A rever'), d.rever, d.rever ? 'alerta' : '')
+    + (o.itens.length
+      ? estatistica(t('est.ordensFalhadas', 'Ordens falhadas (24 h)'), o.falhadas, o.falhadas ? 'grave' : '')
+      : '')
     + estatistica(t('est.semReceber', 'Sem receber há'), saude.texto, saude.classe);
+
+  // Só aparece a quem usa a API: quem dispara por SMS não tem ordens.
+  ordens.hidden = o.itens.length === 0;
+  linhasOrdens.innerHTML = o.itens.map(item => `<tr>
+      <td class="quando">${data(item.criado_em)}</td>
+      <td class="tid">${esc(item.ref)}</td>
+      <td class="num dinheiro">${item.valor == null ? '—' : montante(paraKz(item.valor), item.valor)}</td>
+      <td class="num numero">${esc(item.iban_ultimos5 ?? '—')}</td>
+      <td>${pillOrdem(item.estado)}${motivoOrdem(item.motivo)}</td>
+      <td class="tid">${esc(item.tid ?? '—')}</td>
+      <td>${avisoOrdem(item.aviso)}</td>
+    </tr>`).join('');
 
   carteiras.hidden = d.carteiras.length === 0;
   carteiras.innerHTML = d.carteiras.map(c => cartaoCarteira(c, d.criado_em)).join('');
@@ -148,6 +185,41 @@ function cartaoCarteira(c, criadoEm) {
 const pillEstado = (estado) => estado === 'falha'
   ? `<span class="pill aviso"><i></i>${t('pill.arever', 'a rever')}</span>`
   : `<span class="pill"><i></i>${t('pill.sucesso', 'sucesso')}</span>`;
+
+/** O valor da ordem já vem normalizado pelo servidor: só dígitos. */
+const paraKz = (v) => (/^\d+$/.test(v) ? Number(v) : null);
+
+function pillOrdem(estado) {
+  const [classe, texto] = {
+    pendente: ['aviso', t('ord.pendente', 'em fila')],
+    entregue: ['aviso', t('ord.entregue', 'a executar')],
+    concluida: ['', t('ord.concluida', 'concluída')],
+    falhada: ['grave', t('ord.falhada', 'falhada')],
+    expirada: ['grave', t('ord.expirada', 'expirada')],
+  }[estado] ?? ['aviso', esc(estado)];
+  return `<span class="pill ${classe}"><i></i>${texto}</span>`;
+}
+
+/** A linha que diz ao operador do painel se pode repetir. */
+function motivoOrdem(motivo) {
+  const texto = {
+    nao_recolhida: t('ord.m.naoRecolhida', 'nenhum telemóvel a foi buscar: nada foi executado'),
+    sem_confirmacao: t('ord.m.semConfirmacao', 'executada sem SMS de confirmação: verificar antes de repetir'),
+    falha_operador: t('ord.m.falhaOperador', 'o operador respondeu sem "sucesso"'),
+  }[motivo];
+  return texto ? `<span class="motivo">${texto}</span>` : '';
+}
+
+function avisoOrdem(aviso) {
+  if (aviso == null) return '<span class="quando">—</span>';
+  const [classe, texto] = {
+    aceite: ['', t('ord.a.aceite', 'recebido')],
+    a_tentar: ['aviso', t('ord.a.aTentar', 'a tentar')],
+    recusado: ['grave', t('ord.a.recusado', 'não aceite')],
+    por_enviar: ['aviso', t('ord.a.porEnviar', 'por enviar')],
+  }[aviso];
+  return `<span class="pill ${classe}"><i></i>${texto}</span>`;
+}
 
 /**
  * Como se soube de quem era esta transferência. Só se marca o que não é o caso

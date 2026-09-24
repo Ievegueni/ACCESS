@@ -231,6 +231,10 @@ tr.inativo td:not(.accoes) { color: var(--ténue); }
 /* O ponto reforça o estado para quem não distingue as cores (a cor não é o único sinal). */
 .pill i { width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; flex: none; }
 
+/* O porquê de uma ordem falhada, por baixo do pill: é o que decide se se repete. */
+.motivo { display: block; margin-top: .3rem; font-size: .78rem; color: var(--suave); white-space: normal; max-width: 34ch; }
+.ordens { margin-bottom: 1.5rem; }
+
 .marca {
   font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
   border: 1px solid var(--linha-forte); border-radius: 4px;

@@ -89,11 +89,11 @@
       <tr><td><code>sequencia</code></td><td data-t="dev.sim">Sim</td>
           <td data-t="dev.api.c.seq">O nome da operação tal como está configurada no destino. Com outro, a ordem é aceite e nunca executada</td></tr>
       <tr><td><code>campos</code></td><td data-t="dev.nao">Não</td>
-          <td data-t="dev.api.c.campos">Os valores da operação: <code>valor</code>, <code>iban</code>, … Até 10</td></tr>
+          <td data-t="dev.api.c.campos">Os valores da operação: <code>valor</code>, <code>iban</code>, … Até 10. O <code>valor</code> é em kwanzas inteiros: <code>"500"</code>. <code>"500.00"</code> é aceite e guardado como <code>"500"</code>; cêntimos (<code>"500.50"</code>) dão <code>400</code></td></tr>
       <tr><td><code>numero</code></td><td data-t="dev.nao">Não</td>
           <td data-t="dev.api.c.numero">Por que destino tem de sair. Sem ele, qualquer um dos vossos</td></tr>
       <tr><td><code>notify_url</code></td><td data-t="dev.nao">Não</td>
-          <td data-t="dev.api.c.notify">URL <code>https://</code> vosso. Quando a ordem fica <code>concluida</code> ou <code>expirada</code>, fazemos-lhe um <code>POST</code> com o mesmo corpo da consulta de estado</td></tr>
+          <td data-t="dev.api.c.notify">URL <code>https://</code> vosso. Quando a ordem fica <code>concluida</code>, <code>falhada</code> ou <code>expirada</code>, fazemos-lhe um <code>POST</code> com o mesmo corpo da consulta de estado</td></tr>
     </tbody>
   </table>
 
@@ -105,6 +105,7 @@
   "sequencia": "Transferir",
   "campos": { "valor": "5000", "iban": "AO06…219" },
   "estado": "concluida",
+  "motivo": null,
   "tid": "MP260921.2313.B09562",
   "criado_em": 1758496380000,
   "entregue_em": 1758496381204
@@ -119,8 +120,23 @@
           <td data-t="dev.api.s.entregue.f">Esperar.</td></tr>
       <tr><td><code>concluida</code></td><td data-t="dev.api.s.concluida">Confirmada, com <code>tid</code></td>
           <td data-t="dev.api.s.concluida.f">Ver o <code>estado</code> da transferência na secção 4.</td></tr>
-      <tr><td><code>expirada</code></td><td data-t="dev.api.s.expirada">Dez minutos sem confirmação</td>
-          <td data-t="dev.api.s.expirada.f">Não repetir às cegas — ler primeiro.</td></tr>
+      <tr><td><code>falhada</code></td><td data-t="dev.api.s.falhada">O operador respondeu, com <code>tid</code>, mas sem confirmar sucesso</td>
+          <td data-t="dev.api.s.falhada.f">Ver a transferência na secção 4 antes de repetir.</td></tr>
+      <tr><td><code>expirada</code></td><td data-t="dev.api.s.expirada">Dez minutos sem fechar. O <code>motivo</code> diz porquê</td>
+          <td data-t="dev.api.s.expirada.f">Depende do <code>motivo</code>, abaixo.</td></tr>
+    </tbody>
+  </table>
+
+  <p class="nota" data-t="dev.api.motivo.nota">Quando a ordem não fecha bem, <code>motivo</code> diz porquê. Nas outras é <code>null</code>.</p>
+  <table class="parametros">
+    <thead><tr><th data-t="dev.api.motivo">Motivo</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
+    <tbody>
+      <tr><td><code>nao_recolhida</code></td><td data-t="dev.api.m.naoRecolhida">Nenhum destino a foi buscar em dez minutos (sem rede, desligado). Nada foi executado</td>
+          <td data-t="dev.api.m.naoRecolhida.f">Pode repetir-se, com <code>ref</code> nova.</td></tr>
+      <tr><td><code>sem_confirmacao</code></td><td data-t="dev.api.m.semConfirmacao">Foi executada e a confirmação do operador não chegou em dez minutos</td>
+          <td data-t="dev.api.m.semConfirmacao.f">Não repetir às cegas: ver primeiro na secção 4.</td></tr>
+      <tr><td><code>falha_operador</code></td><td data-t="dev.api.m.falhaOperador">A confirmação chegou sem a palavra "sucesso"</td>
+          <td data-t="dev.api.m.falhaOperador.f">Ver a transferência na secção 4 pelo <code>tid</code>.</td></tr>
     </tbody>
   </table>
 
@@ -153,11 +169,11 @@ if (esperado !== req.headers['x-assinatura']) return res.status(401).end();</cod
 
   <div class="regra perigo">
     <b data-t="dev.api.r3.t"><code>expirada</code> não é repetida sozinha</b>
-    <p data-t="dev.api.r3.d">Significa que a ordem foi entregue e não chegou confirmação em dez
-       minutos. A operação pode ter corrido até ao fim e ter-se perdido só a
-       confirmação — por isso nunca a repetimos automaticamente. Antes de criar
-       outra ordem, verifiquem na listagem da secção 4 se a transferência
-       aconteceu.</p>
+    <p data-t="dev.api.r3.d">Com <code>motivo</code> <code>sem_confirmacao</code>, a operação pode
+       ter corrido até ao fim e ter-se perdido só a confirmação — por isso nunca a
+       repetimos automaticamente. Antes de criar outra ordem, verifiquem na listagem
+       da secção 4 se a transferência aconteceu. Com <code>nao_recolhida</code> nada
+       correu e podem repetir.</p>
   </div>
 
   <div class="regra perigo">

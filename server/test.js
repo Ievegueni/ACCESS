@@ -7,6 +7,7 @@ const {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db,
   validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, notificarPendentes, NOTIF_MAX_TENTATIVAS,
+  ordensDoPainel, MOTIVO,
 } = require('./server.js');
 
 // --- formato angolano: ponto é milhares, vírgula é decimal -----------------
@@ -38,6 +39,29 @@ assert.deepEqual(
 );
 assert.equal(validarOrdem({ ref: 'r1', sequencia: 'T', numero: '+244 923 456 789' }).ordem.numero, '923456789');
 assert.ok(validarOrdem(null).erro);
+
+// --- o valor vai tal e qual para o USSD, que só aceita kwanzas inteiros: "200.00"
+//     era escrito assim e a ordem expirava sem TID ----------------------------
+const valorDe = (valor) => {
+  const r = validarOrdem({ ref: 'r1', sequencia: 'T', campos: { valor } });
+  return r.erro ? 'ERRO' : JSON.parse(r.ordem.campos).valor;
+};
+assert.equal(valorDe('200.00'), '200');
+assert.equal(valorDe('200,00'), '200');
+assert.equal(valorDe('1.00'), '1');
+assert.equal(valorDe('1.0'), '1');
+assert.equal(valorDe('500'), '500');
+assert.equal(valorDe('0500'), '500');
+assert.equal(valorDe(200), '200', 'número JSON também');
+assert.equal(valorDe('200.50'), 'ERRO', 'cêntimos não se arredondam em silêncio');
+assert.equal(valorDe('1.500'), 'ERRO', 'ponto de milhares é ambíguo');
+assert.equal(valorDe('1 500'), 'ERRO');
+assert.equal(valorDe('0'), 'ERRO');
+assert.equal(valorDe('0.00'), 'ERRO');
+assert.equal(valorDe('-5'), 'ERRO');
+assert.equal(valorDe('abc'), 'ERRO');
+assert.equal(validarOrdem({ ref: 'r1', sequencia: 'T', campos: { iban: 'AO06.0040' } }).erro, undefined,
+  'só o valor é normalizado');
 
 // --- números de telemóvel: a mesma SIM escrita de todas as maneiras ---------
 assert.equal(normalizarNumero('+244 923 456 789'), '923456789');
@@ -410,8 +434,26 @@ server.listen(0, async () => {
   db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'PED-TIMEOUT'")
     .run(Date.now() - ORDEM_TIMEOUT_MS - 1);
   expirarOrdens();
-  assert.equal((await verOrdem('PED-TIMEOUT')).estado, 'expirada');
+  const expirada = await verOrdem('PED-TIMEOUT');
+  assert.equal(expirada.estado, 'expirada');
+  assert.equal(expirada.motivo, MOTIVO.SEM_CONFIRMACAO, 'correu: repetir pode transferir duas vezes');
   assert.equal((await buscar()).status, 204, 'expirada não volta à fila');
+
+  // Pendente que nenhum telemóvel foi buscar também expira: um telemóvel sem rede
+  // de madrugada levava-a horas depois e transferia quando já ninguém a queria.
+  await pedir({ ref: 'PED-ORFA', sequencia: 'Transferir', campos: { valor: '10' } });
+  db.prepare("UPDATE ordens SET criado_em = ? WHERE ref = 'PED-ORFA'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+  assert.equal((await buscar()).status, 204, 'o telemóvel que volta não a leva');
+  const orfa = await verOrdem('PED-ORFA');
+  assert.equal(orfa.estado, 'expirada');
+  assert.equal(orfa.motivo, MOTIVO.NAO_RECOLHIDA, 'nada correu: repetir é seguro');
+  assert.equal(orfa.entregue_em, null);
+
+  // Uma pendente recente fica; só a idade conta.
+  await pedir({ ref: 'PED-NOVA', sequencia: 'Transferir', campos: { valor: '11' } });
+  expirarOrdens();
+  assert.equal((await verOrdem('PED-NOVA')).estado, 'pendente');
+  assert.equal((await buscar()).status, 200);
 
   // Long-poll: o pedido fica à espera e devolve mal a ordem chegue.
   const inicio = Date.now();
@@ -457,12 +499,24 @@ server.listen(0, async () => {
     const aviso = JSON.parse(avisos[0].corpo);
     assert.equal(aviso.ref, 'N-1');
     assert.equal(aviso.estado, 'concluida');
+    assert.equal(aviso.motivo, null);
     assert.equal(aviso.tid, 'NOT111.0001');
     const { createHash, createHmac } = require('node:crypto');
     const segredo = createHash('sha256').update(chaveA).digest('hex');
     assert.equal(avisos[0].assinatura, createHmac('sha256', segredo).update(avisos[0].corpo).digest('hex'));
     await notificarPendentes();
     assert.equal(avisos.length, 1, 'aceite uma vez, não repete');
+
+    // SMS de falha: o cliente sabe-o pelo callback, sem ter de cruzar o TID.
+    await pedir({ ...base, ref: 'N-FALHA', campos: { valor: '3' }, notify_url: 'https://cliente.exemplo/cb' });
+    const tf = await (await buscar()).json();
+    assert.equal(await envia(t2, { ...bom, tid: 'NOT111.0009', estado: 'falha', ordem_id: tf.id }), 200);
+    await new Promise((r) => setTimeout(r, 50));
+    const avisoFalha = JSON.parse(avisos.at(-1).corpo);
+    assert.equal(avisoFalha.ref, 'N-FALHA');
+    assert.equal(avisoFalha.estado, 'falhada');
+    assert.equal(avisoFalha.motivo, MOTIVO.FALHA_OPERADOR);
+    assert.equal(avisoFalha.tid, 'NOT111.0009', 'o TID vai na mesma, para o cliente verificar');
 
     // Cliente em baixo: tenta de novo quando chega a hora, e desiste ao fim do limite.
     respostaCliente = 503;
@@ -480,6 +534,19 @@ server.listen(0, async () => {
       await notificarPendentes();
     }
     assert.equal(avisos.length - antes + 1, NOTIF_MAX_TENTATIVAS, 'desiste ao fim do limite');
+
+    // O painel distingue "o cliente recebeu" de "desistimos": sem notificado_em
+    // as duas ficavam com notif_proxima a null.
+    const painel = ordensDoPainel(db.prepare("SELECT cliente_id FROM ordens WHERE ref = 'N-1'").get().cliente_id);
+    const linha = (ref) => painel.itens.find((i) => i.ref === ref);
+    assert.equal(linha('N-1').aviso, 'aceite');
+    assert.equal(linha('N-2').aviso, 'recusado');
+    assert.equal(linha('N-2').motivo, MOTIVO.SEM_CONFIRMACAO);
+    assert.equal(linha('N-FALHA').estado, 'falhada');
+    assert.equal(linha('PED-001').aviso, null, 'sem notify_url não há aviso');
+    assert.equal(linha('PED-001').iban_ultimos5, '.0040', 'só a cauda do IBAN');
+    assert.ok(!JSON.stringify(painel).includes('AO06.0040'), 'o IBAN inteiro não sai para o painel');
+    assert.ok(painel.falhadas >= 3, 'contagem das últimas 24 h');
   } finally {
     globalThis.fetch = fetchReal;
   }

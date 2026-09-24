@@ -282,14 +282,21 @@ sistema do cliente ──GET /api/v1/ordens/<ref> ou /api/v1/transferencias
 |---|---|
 | `ref` | Referência do cliente. `[A-Za-z0-9._-]{1,64}`. **É a idempotência** |
 | `sequencia` | Nome da sequência tal como está configurada na app do telemóvel. O administrador publica-o em ⋯ → **Formato do pedido por API**, validado pelo mesmo validador deste endpoint |
-| `campos` | Entram nos passos como `{valor}`, `{iban}`. Chaves em minúsculas, máx. 10 |
+| `campos` | Entram nos passos como `{valor}`, `{iban}`. Chaves em minúsculas, máx. 10. `valor` em kwanzas inteiros: `"200.00"` é guardado como `"200"`, cêntimos e `"1.500"` dão `400` — ver abaixo |
 | `numero` | *Opcional.* Por que telemóvel tem de sair. Sem ele, qualquer um do cliente |
 | `notify_url` | *Opcional.* `https://` do cliente, avisado quando a ordem fecha — ver abaixo |
 
 `201` quando é nova, **`200` quando a `ref` já existia** — devolve a que lá está,
 sem criar outra. Repetir o pedido é seguro e é o que se deve fazer quando a
 resposta se perde. Corpo de ambas: `{ref, id, sequencia, campos, estado, tid,
-criado_em, entregue_em}`.
+criado_em, entregue_em, motivo}`.
+
+**Porque se normaliza o `valor`:** vai tal e qual para a caixa USSD. Em
+2026-09-24 as ordens com `"1.00"` e `"200.00"` expiraram todas sem TID, enquanto a
+de `"500"` e as disparadas por SMS (valor inteiro) fecharam. Zeros decimais caem;
+cêntimos a sério são recusados com erro, em vez de falharem em silêncio no
+telemóvel; `"1.500"` também, porque em Angola o ponto é milhares e adivinhar é
+transferir outro valor.
 
 `400` só por payload inválido; `503` por problema nosso. Os campos são validados
 com mão pesada — vão ser escritos numa caixa USSD e mostrados no painel.
@@ -302,8 +309,23 @@ O mesmo corpo. `estado` é um de:
 |---|---|
 | `pendente` | à espera que um telemóvel a leve |
 | `entregue` | um telemóvel levou-a e está a marcar |
-| `concluida` | chegou a confirmação; `tid` preenchido |
-| `expirada` | passaram 10 minutos sem confirmação — ver abaixo |
+| `concluida` | chegou a confirmação com "sucesso"; `tid` preenchido |
+| `falhada` | chegou a confirmação sem "sucesso" (§3); `tid` preenchido, `motivo: falha_operador` |
+| `expirada` | passaram 10 minutos sem fechar — o `motivo` diz porquê, ver abaixo |
+
+`motivo` é `null` salvo nestes casos:
+
+| `motivo` | Estado | Significa | Repetir? |
+|---|---|---|---|
+| `nao_recolhida` | `expirada` | 10 min `pendente`: nenhum telemóvel a foi buscar | Sim, nada correu |
+| `sem_confirmacao` | `expirada` | 10 min `entregue` sem SMS do operador | Só depois de verificar |
+| `falha_operador` | `falhada` | SMS com TID mas sem "sucesso" | Só depois de verificar |
+
+A pendente expira porque, antes, esperava para sempre: em 2026-09-24 um telemóvel
+sem ligação durante a noite foi buscar uma ordem **14 h** depois de criada e
+executou-a. `falhada` existe porque o cliente pediu para saber da falha no
+callback; antes a ordem ficava `concluida` e só cruzando o TID com a listagem se
+via que a transferência era `falha`.
 
 `GET /api/v1/ordens?desde=<id>` lista, paginado por `id`.
 
@@ -321,7 +343,7 @@ telemóvel continua a tentar.
 ### `notify_url` — o painel avisa o cliente
 
 Pedido do cliente: consultar o estado em ciclo não escala. Quando a ordem passa a
-`concluida` ou `expirada`, o painel faz `POST` ao `notify_url` com o mesmo corpo
+`concluida`, `falhada` ou `expirada`, o painel faz `POST` ao `notify_url` com o mesmo corpo
 do `GET /api/v1/ordens/<ref>`.
 
 - **Assinatura:** `X-Assinatura` = HMAC-SHA256 hex do corpo, com chave
@@ -330,10 +352,19 @@ do `GET /api/v1/ordens/<ref>`.
 - **Pelo menos uma vez:** só `2xx` conta. Falha → repete com espera a dobrar desde
   30 s, 8 tentativas (~2 h), persistido em `notif_proxima`/`notif_tentativas` —
   sobrevive a reinícios. Depois disso desiste; o `GET` continua a funcionar.
+  `notificado_em` guarda quando o cliente aceitou: é o que permite ao painel
+  distinguir "recebido" de "desistimos" (as duas têm `notif_proxima` null).
 - **Só HTTPS, sem seguir redirects:** corta o grosso do SSRF. Não resolve o DNS
   para recusar IPs privados (marcado `ponytail:` no `urlNotificacaoValida`).
 - A expiração passou a correr também num `setInterval` de 30 s: sem ninguém a
   consultar, uma ordem num telemóvel morto nunca expirava nem era avisada.
+
+### No painel
+
+Secção **Ordens por API** (só aparece a quem tem ordens): as últimas 50, com
+estado, motivo em texto, TID e se o callback foi recebido. Dos `campos` só se
+mostram o valor e os 5 últimos do IBAN. Na faixa de topo, **Ordens falhadas
+(24 h)** conta as `falhada` + `expirada`.
 
 ### `expirada` nunca volta a `pendente`
 
