@@ -206,6 +206,7 @@ function motivoOrdem(motivo) {
     nao_recolhida: t('ord.m.naoRecolhida', 'nenhum telemóvel a foi buscar: nada foi executado'),
     sem_confirmacao: t('ord.m.semConfirmacao', 'executada sem SMS de confirmação: verificar antes de repetir'),
     falha_operador: t('ord.m.falhaOperador', 'o operador respondeu sem "sucesso"'),
+    operador_indisponivel: t('ord.m.operadorIndisponivel', 'operador indisponível, repetido sem êxito: nada foi executado'),
   }[motivo];
   return texto ? `<span class="motivo">${texto}</span>` : '';
 }

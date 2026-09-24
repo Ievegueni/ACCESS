@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.comunica.access.SequenceLauncher
 import com.comunica.access.api.OrderPoller
 import com.comunica.access.data.RulesStore
 import com.comunica.access.model.AutomationRule
@@ -51,6 +52,11 @@ class AutomationService : AccessibilityService() {
                     Log.d(TAG, "Passo ${SequenceRunner.progress} → $shown")
                     RulesStore.log(this, "${SequenceRunner.name} · passo ${SequenceRunner.progress} · $shown")
                     if (!SequenceRunner.running) RulesStore.log(this, "${SequenceRunner.name} · sequência terminada")
+                }
+                // "Serviço indisponível": o runner já parou, o launcher decide se repete.
+                SequenceRunner.takeFailure()?.let { failure ->
+                    RulesStore.log(this, "${SequenceRunner.name} · operador: \"${failure.text.take(80)}\"")
+                    SequenceLauncher.onFailure(this, failure)
                 }
             }
             return

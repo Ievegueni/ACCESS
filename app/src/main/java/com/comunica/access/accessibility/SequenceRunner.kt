@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.comunica.access.model.Sequence
 import com.comunica.access.model.Step
+import com.comunica.access.model.UssdFailure
 
 /**
  * Estado de uma sequência USSD em execução.
@@ -50,6 +51,16 @@ object SequenceRunner {
      */
     var orderId: Int? = null
 
+    /**
+     * O erro do operador que acabou com a sequência, à espera de ser levado por
+     * [takeFailure]. `beforeValue` diz se repetir é seguro (ver [UssdFailure]).
+     */
+    data class Failure(val beforeValue: Boolean, val text: String)
+
+    private var failure: Failure? = null
+
+    fun takeFailure(): Failure? = failure.also { failure = null }
+
     /** Relógio monótono do arranque, para a sequência não ficar pendurada. */
     private var startedAt = 0L
 
@@ -79,6 +90,7 @@ object SequenceRunner {
         index = 0
         startedAt = SystemClock.elapsedRealtime()
         lastAnswered = null
+        failure = null
         this.smsValue = smsValue
         this.smsFields = smsFields
         this.orderId = orderId
@@ -135,16 +147,32 @@ object SequenceRunner {
     fun apply(root: AccessibilityNodeInfo): String? {
         if (!running) return null
 
-        val confirm = findConfirm(root)
-        if (confirm == null) {
-            Log.d(TAG, "sem botão confirmar em ${root.packageName} — ${describe(root)}")
-            return null
-        }
-
         // A assinatura ignora campos editáveis: o que lá escrevemos mudaria o texto
         // e a mesma caixa passaria por nova.
         val signature = signatureOf(root)
         if (signature == lastAnswered) return null
+
+        val confirm = findConfirm(root)
+
+        // "Serviço indisponível": antes dos passos, porque nenhum passo a espera e
+        // sem isto o runner ficava parado nela até ao MAX_MS. Fecha-se a caixa e a
+        // sequência acaba aqui; quem decide se repete é o SequenceLauncher. O
+        // orderId fica: se o erro veio depois do valor, a confirmação ainda pode
+        // chegar e é ela que fecha a ordem.
+        if (NodeFinder.findEditable(root) == null && UssdFailure.matches(signature)) {
+            confirm?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            failure = Failure(UssdFailure.beforeValue(steps, index), signature)
+            Log.w(TAG, "erro do operador no passo ${index + 1}: \"$signature\"")
+            steps = emptyList()
+            index = 0
+            lastAnswered = null
+            return null
+        }
+
+        if (confirm == null) {
+            Log.d(TAG, "sem botão confirmar em ${root.packageName} — ${describe(root)}")
+            return null
+        }
 
         val step = Step.parse(resolve(steps[index]) ?: return null)
 

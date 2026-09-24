@@ -390,7 +390,13 @@ const MOTIVO = {
   SEM_CONFIRMACAO: 'sem_confirmacao',
   // Chegou SMS com TID mas sem "sucesso" (ver BACKOFFICE §3).
   FALHA_OPERADOR: 'falha_operador',
+  // O operador respondeu "serviço indisponível" antes de o valor ser escrito;
+  // o telemóvel repetiu e desistiu. Nada foi submetido: repetir é seguro.
+  OPERADOR_INDISPONIVEL: 'operador_indisponivel',
 };
+
+/** Os motivos que o próprio telemóvel pode dar. Os outros só o servidor decide. */
+const MOTIVOS_DO_TELEMOVEL = new Set([MOTIVO.OPERADOR_INDISPONIVEL]);
 
 const REF_VALIDA = /^[A-Za-z0-9._\-]{1,64}$/;
 const SEQUENCIA_VALIDA = /^[\p{L}\d .\-_]{1,60}$/u;
@@ -593,6 +599,24 @@ function tomarOrdem(clienteId, numeroNormalizado) {
   if (!changes) return null;   // outro telemóvel chegou primeiro
 
   return { id: ordem.id, ref: ordem.ref, sequencia: ordem.sequencia, campos: JSON.parse(ordem.campos) };
+}
+
+/**
+ * O telemóvel desistiu da ordem e diz porquê. Fecha-a já como `falhada`, em vez
+ * de a deixar 10 minutos `entregue` até expirar como `sem_confirmacao` — que é o
+ * motivo que manda não repetir, quando aqui repetir é seguro.
+ *
+ * Só fecha a que ainda está `entregue`: se a confirmação chegou entretanto, é
+ * ela que manda. Devolve se fechou.
+ */
+function falharOrdem(id, clienteId, motivo) {
+  const { changes } = db.prepare(
+    `UPDATE ordens SET estado = 'falhada', motivo = ?,
+       notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
+     WHERE id = ? AND cliente_id = ? AND estado = 'entregue'`
+  ).run(motivo, Date.now(), id, clienteId);
+  if (changes) notificarPendentes();   // sem await: o telemóvel não espera pelo cliente
+  return changes > 0;
 }
 
 /** Como o cliente vê a ordem. Forma pública: mudá-la parte a integração dele. */
@@ -1022,6 +1046,23 @@ async function tratar(req, res) {
     return res.end();
   }
 
+  // 1.4 O telemóvel desistiu de uma ordem que levou (ver falharOrdem). Mesmo
+  //     token e mesma regra do número que o pedido acima, para chegar ao mesmo
+  //     cliente a quem a ordem foi entregue.
+  const falha = /^\/api\/telemovel\/ordens\/(\d+)\/falha$/.exec(url.pathname);
+  if (falha) {
+    const cliente = porChave(req, 'token_hash');
+    if (!cliente) return json(res, 401, { erro: 'token inválido' });
+    if (!cliente.ativo) return json(res, 503, { erro: 'cliente desativado' });
+    if (req.method !== 'POST') return json(res, 405, { erro: 'só POST' });
+
+    const { motivo, numero } = JSON.parse(await corpoDe(req, 1024)) || {};
+    if (!MOTIVOS_DO_TELEMOVEL.has(motivo)) return json(res, 400, { erro: 'motivo inválido' });
+    const { clienteId } = atribuir(numero, cliente.id);
+    // 200 mesmo que já não estivesse entregue: repetir o aviso tem de ser inofensivo.
+    return json(res, 200, { ok: true, fechada: falharOrdem(Number(falha[1]), clienteId, motivo) });
+  }
+
   // 2. Login.
   if (req.method === 'POST' && url.pathname === '/entrar') {
     if (travado(ip)) return json(res, 429, { erro: 'demasiadas tentativas' });
@@ -1335,6 +1376,6 @@ if (require.main === module) {
 module.exports = {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db, server,
-  validarOrdem, criarOrdem, tomarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, ordensDoPainel, MOTIVO,
+  validarOrdem, criarOrdem, tomarOrdem, falharOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, ordensDoPainel, MOTIVO,
   notificarPendentes, NOTIF_MAX_TENTATIVAS,
 };

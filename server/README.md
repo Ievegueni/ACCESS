@@ -108,6 +108,8 @@ fica e deixa de contar para os totais de clientes ativos.
 - `POST /api/v1/ordens` — `Bearer ak_…`, cria uma ordem (trigger por API);
   `GET /api/v1/ordens/<ref>` dá o estado. Contrato em `../BACKOFFICE.md §8`.
 - `GET /api/telemovel/ordens` — `Bearer <token do cliente>`, long-poll do telemóvel.
+- `POST /api/telemovel/ordens/<id>/falha` — `Bearer <token do cliente>`, o telemóvel
+  desiste de uma ordem (`operador_indisponivel`). Ver `../BACKOFFICE.md §8`.
 - `/api/clientes` — `GET` lista; `POST` com `accao`
   `criar` | `numero` | `tirarNumero` | `token` | `senha` | `renomear` | `estado` |
   `formato` | `formatoApi` | `chaveApi` | `remover`.

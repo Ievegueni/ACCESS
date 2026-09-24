@@ -310,7 +310,7 @@ O mesmo corpo. `estado` é um de:
 | `pendente` | à espera que um telemóvel a leve |
 | `entregue` | um telemóvel levou-a e está a marcar |
 | `concluida` | chegou a confirmação com "sucesso"; `tid` preenchido |
-| `falhada` | chegou a confirmação sem "sucesso" (§3); `tid` preenchido, `motivo: falha_operador` |
+| `falhada` | chegou a confirmação sem "sucesso" (§3), com `tid` e `motivo: falha_operador`; ou o operador esteve indisponível, sem `tid` e com `motivo: operador_indisponivel` |
 | `expirada` | passaram 10 minutos sem fechar — o `motivo` diz porquê, ver abaixo |
 
 `motivo` é `null` salvo nestes casos:
@@ -320,6 +320,7 @@ O mesmo corpo. `estado` é um de:
 | `nao_recolhida` | `expirada` | 10 min `pendente`: nenhum telemóvel a foi buscar | Sim, nada correu |
 | `sem_confirmacao` | `expirada` | 10 min `entregue` sem SMS do operador | Só depois de verificar |
 | `falha_operador` | `falhada` | SMS com TID mas sem "sucesso" | Só depois de verificar |
+| `operador_indisponivel` | `falhada` | caixa de erro do operador antes de o valor ser escrito, 3 repetições sem êxito | Sim, nada correu |
 
 A pendente expira porque, antes, esperava para sempre: em 2026-09-24 um telemóvel
 sem ligação durante a noite foi buscar uma ordem **14 h** depois de criada e
@@ -328,6 +329,32 @@ callback; antes a ordem ficava `concluida` e só cruzando o TID com a listagem s
 via que a transferência era `falha`.
 
 `GET /api/v1/ordens?desde=<id>` lista, paginado por `id`.
+
+### "Serviço indisponível": o telemóvel repete sozinho
+
+Em 2026-09-24 a `TESTE-20260924-094026` ficou `entregue` porque o operador
+respondeu à marcação com "serviço indisponível, tente mais tarde". A caixa só tem
+OK, o passo seguinte esperava um campo de texto, e o runner ficou 5 minutos
+parado (sem ir buscar outras ordens) até a ordem expirar como `sem_confirmacao`,
+que é precisamente o motivo que manda **não** repetir.
+
+Agora o `SequenceRunner` reconhece a caixa pelo texto (`UssdFailure`), carrega em
+OK e liberta-se. O que acontece a seguir depende de o valor já ter sido escrito:
+
+- **Antes do passo com `{valor}`** (ou, numa sequência sem `{valor}`, antes do
+  primeiro passo): nada pode ter sido submetido. O telemóvel volta a marcar ao fim
+  de 30 s, até 3 vezes. Se todas falharem, faz
+  `POST /api/telemovel/ordens/<id>/falha {motivo: "operador_indisponivel", numero}`
+  e a ordem fecha logo como `falhada`, com callback. O cliente pode repetir.
+- **Depois do `{valor}`**: pode ter corrido. Não repete e não avisa; a ordem segue
+  o caminho de sempre (confirmação por SMS, ou `sem_confirmacao` aos 10 min).
+
+Porque é o telemóvel a repetir e não o sistema do cliente: é o único que sabe em
+que passo apareceu o erro. Do lado de fora só se vê `entregue`, e repetir às
+cegas com `ref` nova é arriscar transferir duas vezes.
+
+O endpoint só aceita motivos da lista `MOTIVOS_DO_TELEMOVEL` e só fecha ordens
+ainda `entregue`: se a confirmação chegou entretanto, ganha ela.
 
 ### `GET /api/telemovel/ordens` — o telemóvel
 

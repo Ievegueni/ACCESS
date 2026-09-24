@@ -470,6 +470,32 @@ server.listen(0, async () => {
   assert.equal((await buscar()).status, 204, 'o telemóvel do A não leva a ordem do B');
   assert.equal((await buscar('?numero=924 111 222')).status, 200, 'o do B leva');
 
+  // "Serviço indisponível" antes do valor: o telemóvel repetiu, desistiu e avisa.
+  // Fecha já, com um motivo que diz que repetir é seguro, em vez de expirar ao
+  // fim de 10 min como sem_confirmacao (que manda não repetir).
+  const desistir = (id, corpo, t = t2) => fetch(`${P}/api/telemovel/ordens/${id}/falha`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+    body: JSON.stringify(corpo),
+  });
+  await pedir({ ref: 'PED-INDISP', sequencia: 'Transferir', campos: { valor: '5' } });
+  const indisp = await (await buscar()).json();
+  assert.equal((await desistir(indisp.id, { motivo: 'sem_confirmacao' })).status, 400,
+    'o telemóvel não escolhe os motivos do servidor');
+  assert.equal((await desistir(indisp.id, { motivo: 'operador_indisponivel' }, 'token-errado')).status, 401);
+  assert.equal((await desistir(indisp.id, { motivo: 'operador_indisponivel', numero: '924111222' })).status, 200);
+  assert.equal((await verOrdem('PED-INDISP')).estado, 'entregue', 'um telemóvel do B não fecha a ordem do A');
+  const r1 = await (await desistir(indisp.id, { motivo: 'operador_indisponivel' })).json();
+  assert.equal(r1.fechada, true);
+  const falhou = await verOrdem('PED-INDISP');
+  assert.equal(falhou.estado, 'falhada');
+  assert.equal(falhou.motivo, MOTIVO.OPERADOR_INDISPONIVEL);
+  const r2 = await (await desistir(indisp.id, { motivo: 'operador_indisponivel' })).json();
+  assert.equal(r2.fechada, false, 'repetir o aviso é inofensivo');
+  // A que já fechou por SMS não é desfeita por um aviso atrasado.
+  assert.equal((await desistir(trabalho.id, { motivo: 'operador_indisponivel' })).status, 200);
+  assert.equal((await verOrdem('PED-001')).estado, 'concluida');
+
   // --- notify_url: o painel avisa o cliente quando a ordem fecha ----------------
   assert.equal((await pedir({ ...base, ref: 'N-0', notify_url: 'http://cliente.exemplo/cb' })).status, 400,
     'só https');

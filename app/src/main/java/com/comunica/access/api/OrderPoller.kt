@@ -10,6 +10,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlin.concurrent.thread
 
 /**
  * Pergunta ao painel se há trabalho e executa a sequência pedida.
@@ -66,9 +67,10 @@ object OrderPoller {
                 continue
             }
 
-            if (SequenceRunner.running) {
+            if (SequenceRunner.running || SequenceLauncher.aRepetir > 0) {
                 // Não se vai buscar o que não se pode executar: a ordem ficaria
-                // marcada como entregue no servidor e expirava à espera.
+                // marcada como entregue no servidor e expirava à espera. Uma
+                // repetição agendada (operador indisponível) conta como ocupado.
                 if (!dormir(PAUSA_OCUPADO_MS)) return
                 continue
             }
@@ -155,6 +157,53 @@ object OrderPoller {
         // está à vista na app, tal como no caminho do SMS.
         RulesStore.log(context, "ordem $ref · ${sequencia.name} (${campos.keys.joinToString(", ")})")
         SequenceLauncher.launch(context, sequencia, campos["sms"], campos, id)
+    }
+
+    /**
+     * Diz ao painel que este telemóvel desistiu da ordem [id], para ela fechar já
+     * como `falhada` com [motivo] em vez de expirar ao fim de 10 minutos como
+     * `sem_confirmacao` (BACKOFFICE.md §8).
+     *
+     * ponytail: em memória, 3 tentativas. Se todas falharem a ordem expira na
+     * mesma, só com o motivo menos útil. Uma fila em disco, como a do webhook,
+     * se isto se perder na prática.
+     */
+    fun desistir(context: Context, id: Int, motivo: String) {
+        val config = WebhookConfig.from(context) ?: return
+        val corpo = JSONObject()
+            .put("motivo", motivo)
+            .put("numero", WebhookConfig.numero(context))
+            .toString()
+        thread(isDaemon = true) {
+            repeat(3) { tentativa ->
+                val codigo = runCatching {
+                    val connection = (URL("${config.base}/api/telemovel/ordens/$id/falha")
+                        .openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        connectTimeout = TIMEOUT_MS
+                        readTimeout = TIMEOUT_MS
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        setRequestProperty("Authorization", "Bearer ${config.token}")
+                    }
+                    try {
+                        connection.outputStream.use { it.write(corpo.toByteArray()) }
+                        connection.responseCode
+                    } finally {
+                        connection.disconnect()
+                    }
+                }.getOrDefault(-1)
+
+                // 4xx não melhora com repetição, tal como no webhook.
+                if (codigo in 200..499) {
+                    RulesStore.log(context, "ordem $id · painel avisado ($motivo)")
+                    return@thread
+                }
+                Log.w(TAG, "ordem $id: aviso ao painel falhou (${descricao(codigo)})")
+                if (tentativa < 2 && !dormir(10_000)) return@thread
+            }
+            RulesStore.log(context, "ordem $id · não foi possível avisar o painel")
+        }
     }
 
     /** Dorme, ou devolve false se o serviço entretanto parou. */

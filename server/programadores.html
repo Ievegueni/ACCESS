@@ -120,8 +120,8 @@
           <td data-t="dev.api.s.entregue.f">Esperar.</td></tr>
       <tr><td><code>concluida</code></td><td data-t="dev.api.s.concluida">Confirmada, com <code>tid</code></td>
           <td data-t="dev.api.s.concluida.f">Ver o <code>estado</code> da transferência na secção 4.</td></tr>
-      <tr><td><code>falhada</code></td><td data-t="dev.api.s.falhada">O operador respondeu, com <code>tid</code>, mas sem confirmar sucesso</td>
-          <td data-t="dev.api.s.falhada.f">Ver a transferência na secção 4 antes de repetir.</td></tr>
+      <tr><td><code>falhada</code></td><td data-t="dev.api.s.falhada">O operador respondeu sem confirmar sucesso. O <code>motivo</code> diz porquê</td>
+          <td data-t="dev.api.s.falhada.f">Depende do <code>motivo</code>, abaixo.</td></tr>
       <tr><td><code>expirada</code></td><td data-t="dev.api.s.expirada">Dez minutos sem fechar. O <code>motivo</code> diz porquê</td>
           <td data-t="dev.api.s.expirada.f">Depende do <code>motivo</code>, abaixo.</td></tr>
     </tbody>
@@ -137,6 +137,8 @@
           <td data-t="dev.api.m.semConfirmacao.f">Não repetir às cegas: ver primeiro na secção 4.</td></tr>
       <tr><td><code>falha_operador</code></td><td data-t="dev.api.m.falhaOperador">A confirmação chegou sem a palavra "sucesso"</td>
           <td data-t="dev.api.m.falhaOperador.f">Ver a transferência na secção 4 pelo <code>tid</code>.</td></tr>
+      <tr><td><code>operador_indisponivel</code></td><td data-t="dev.api.m.operadorIndisponivel">O operador respondeu "serviço indisponível" antes de o valor ser enviado. Tentámos mais 3 vezes, de 30 em 30 s. Nada foi executado</td>
+          <td data-t="dev.api.m.operadorIndisponivel.f">Pode repetir-se, com <code>ref</code> nova.</td></tr>
     </tbody>
   </table>
 
