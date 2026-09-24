@@ -58,7 +58,7 @@ db.exec(`
     numero      TEXT,                       -- normalizado; null = qualquer telemóvel do cliente
     sequencia   TEXT NOT NULL,              -- nome da sequência configurada na app
     campos      TEXT NOT NULL,              -- JSON: {valor, iban, ...} → {valor} nos passos
-    estado      TEXT NOT NULL CHECK (estado IN ('pendente','entregue','concluida','falhada','expirada')),
+    estado      TEXT NOT NULL CHECK (estado IN ('pendente','entregue','concluida','falhada','expirada','a_verificar')),
     tid         TEXT,                       -- preenchido quando a confirmação chega
     criado_em   INTEGER NOT NULL,
     entregue_em INTEGER,
@@ -158,6 +158,35 @@ if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'ordens'").get().sql
     db.exec(`INSERT INTO ordens_nova SELECT * FROM ordens;
              DROP TABLE ordens;
              ALTER TABLE ordens_nova RENAME TO ordens;`);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+if (!colunasOrdens.includes('telemovel')) {
+  // O SIM que levou a ordem (normalizado). `numero` é o pedido, e é quase sempre
+  // null; sem isto o administrador não sabe em que carteira ir ver o extrato de
+  // uma ordem `a_verificar`.
+  db.exec('ALTER TABLE ordens ADD COLUMN telemovel TEXT');
+}
+if (!db.prepare("SELECT sql FROM sqlite_master WHERE name = 'ordens'").get().sql.includes("'a_verificar'")) {
+  // Mesma técnica que acima, para o estado `a_verificar`. As ordens que antes
+  // fechavam com resultado incerto (expirada sem SMS, SMS sem "sucesso") passam
+  // para ele: o cliente só as vê fechadas quando o administrador decidir.
+  // O callback em curso é cancelado: sairia como `em_curso`, que não é um fim.
+  const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'ordens'").get();
+  db.exec('BEGIN');
+  try {
+    // Depois de um RENAME o SQLite guarda o nome entre aspas: `CREATE TABLE "ordens"`.
+    db.exec(sql.replace(/^CREATE TABLE\s+"?ordens"?/, 'CREATE TABLE ordens_nova')
+      .replace("'falhada','expirada'", "'falhada','expirada','a_verificar'"));
+    db.exec(`INSERT INTO ordens_nova SELECT * FROM ordens;
+             DROP TABLE ordens;
+             ALTER TABLE ordens_nova RENAME TO ordens;
+             UPDATE ordens SET estado = 'a_verificar', notif_proxima = NULL
+              WHERE (estado = 'expirada' AND motivo = 'sem_confirmacao')
+                 OR (estado = 'falhada' AND motivo = 'falha_operador');`);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -380,19 +409,23 @@ function validar(corpo) {
 const ORDEM_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Porque é que a ordem acabou mal. Vai no callback e no painel: é o que diz ao
- * cliente se pode repetir.
+ * Porque é que a ordem não fechou sozinha com sucesso. Os dois primeiros são
+ * certezas de que nada correu; os dois do meio deixam a ordem `a_verificar`,
+ * porque pode ter corrido; o último diz que foi o administrador a fechá-la.
  */
 const MOTIVO = {
   // Nenhum telemóvel a foi buscar: nada correu, repetir é seguro.
   NAO_RECOLHIDA: 'nao_recolhida',
-  // O telemóvel levou-a e o SMS do operador nunca chegou. Pode ter corrido.
-  SEM_CONFIRMACAO: 'sem_confirmacao',
-  // Chegou SMS com TID mas sem "sucesso" (ver BACKOFFICE §3).
-  FALHA_OPERADOR: 'falha_operador',
   // O operador respondeu "serviço indisponível" antes de o valor ser escrito;
   // o telemóvel repetiu e desistiu. Nada foi submetido: repetir é seguro.
   OPERADOR_INDISPONIVEL: 'operador_indisponivel',
+  // O telemóvel levou-a e o SMS do operador nunca chegou. Pode ter corrido.
+  SEM_CONFIRMACAO: 'sem_confirmacao',
+  // Chegou SMS com TID mas sem "sucesso" (ver BACKOFFICE §3): pode ser só texto
+  // que o parser não conhece.
+  FALHA_OPERADOR: 'falha_operador',
+  // O administrador viu o extrato e fechou-a (sucesso ou falha).
+  VERIFICACAO_MANUAL: 'verificacao_manual',
 };
 
 /** Os motivos que o próprio telemóvel pode dar. Os outros só o servidor decide. */
@@ -478,30 +511,33 @@ function urlNotificacaoValida(u) {
 }
 
 /**
- * Ordem entregue a um telemóvel que nunca deu sinal volta a ser... nada.
+ * O que acontece às ordens que ficam 10 minutos sem fechar.
  *
- * Fica `expirada`, **nunca** outra vez `pendente`: reenviar sozinho uma
- * transferência que talvez tenha corrido é pior do que não a fazer. Quem repete
- * é o cliente, com uma `ref` nova, depois de ver o estado.
+ * A pendente fica `expirada`: nenhum telemóvel a levou, nada correu, e o
+ * cliente é avisado de uma falha certa. Tem de expirar porque um telemóvel sem
+ * rede de madrugada ia buscá-la horas depois e transferia quando o cliente já
+ * tinha desistido dela.
  *
- * A pendente também expira: um telemóvel sem rede de madrugada ia buscá-la horas
- * depois e transferia quando o cliente já tinha desistido dela. O UPDATE é
- * condicional ao estado, tal como o de tomarOrdem(): das duas, só uma ganha.
+ * A entregue fica `a_verificar`, **sem aviso**: pode ter corrido até ao fim e
+ * ter-se perdido só o SMS. Dizer "falha" fazia o cliente repetir e transferir
+ * duas vezes; dizer "sucesso" era inventar. Fecha quando o SMS chegar atrasado
+ * ou quando o administrador decidir (decidirOrdem). Nunca volta a `pendente`.
  *
- * Corre a pedido e também num temporizador (ver o fim do ficheiro): com o
- * `notify_url` o cliente deixa de consultar, e um telemóvel morto também não
- * pergunta — sem o temporizador, a expiração nunca chegava a ser notificada.
+ * Os UPDATE são condicionais ao estado, tal como o de tomarOrdem(): das duas,
+ * só uma ganha. Corre a pedido e num temporizador (ver o fim do ficheiro): um
+ * telemóvel morto não pergunta nada, e o cliente com `notify_url` também não.
  */
 function expirarOrdens() {
-  const expirar = db.prepare(
+  const limite = Date.now() - ORDEM_TIMEOUT_MS;
+  const { changes } = db.prepare(
     `UPDATE ordens SET estado = 'expirada', motivo = ?,
        notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
-     WHERE estado = ? AND (CASE estado WHEN 'pendente' THEN criado_em ELSE entregue_em END) < ?`
-  );
-  const limite = Date.now() - ORDEM_TIMEOUT_MS;
-  const changes =
-    expirar.run(MOTIVO.NAO_RECOLHIDA, Date.now(), 'pendente', limite).changes
-    + expirar.run(MOTIVO.SEM_CONFIRMACAO, Date.now(), 'entregue', limite).changes;
+     WHERE estado = 'pendente' AND criado_em < ?`
+  ).run(MOTIVO.NAO_RECOLHIDA, Date.now(), limite);
+  db.prepare(
+    `UPDATE ordens SET estado = 'a_verificar', motivo = ?
+     WHERE estado = 'entregue' AND entregue_em < ?`
+  ).run(MOTIVO.SEM_CONFIRMACAO, limite);
   if (changes) notificarPendentes();
 }
 
@@ -524,21 +560,8 @@ async function notificar(o) {
   if (aNotificar.has(o.id)) return;
   aNotificar.add(o.id);
   try {
-    const corpo = JSON.stringify(ordemPublica(o));
-    let ok = false;
-    try {
-      const r = await fetch(o.notify_url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Assinatura': createHmac('sha256', o.api_hash || '').update(corpo).digest('hex'),
-        },
-        body: corpo,
-        redirect: 'manual',              // um 3xx para http:// ou para dentro não é seguido
-        signal: AbortSignal.timeout(10000),
-      });
-      ok = r.status >= 200 && r.status < 300;
-    } catch { /* rede, DNS, timeout: conta como falha */ }
+    const status = await enviarCallback(o.notify_url, ordemPublica(o), o.api_hash);
+    const ok = status >= 200 && status < 300;
 
     const tentativas = o.notif_tentativas + 1;
     const proxima = ok || tentativas >= NOTIF_MAX_TENTATIVAS
@@ -550,6 +573,29 @@ async function notificar(o) {
     if (!ok) console.error(`notify_url falhou: ordem ${o.id}, tentativa ${tentativas}`);
   } finally {
     aNotificar.delete(o.id);
+  }
+}
+
+/**
+ * Um POST assinado ao sistema do cliente. Devolve o status HTTP, ou null se nem
+ * chegou a haver resposta (rede, DNS, 10 s sem resposta).
+ */
+async function enviarCallback(url, corpoObj, apiHash) {
+  const corpo = JSON.stringify(corpoObj);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Assinatura': createHmac('sha256', apiHash || '').update(corpo).digest('hex'),
+      },
+      body: corpo,
+      redirect: 'manual',              // um 3xx para http:// ou para dentro não é seguido
+      signal: AbortSignal.timeout(10000),
+    });
+    return r.status;
+  } catch {
+    return null;
   }
 }
 
@@ -594,8 +640,8 @@ function tomarOrdem(clienteId, numeroNormalizado) {
   if (!ordem) return null;
 
   const { changes } = db.prepare(
-    "UPDATE ordens SET estado = 'entregue', entregue_em = ? WHERE id = ? AND estado = 'pendente'"
-  ).run(Date.now(), ordem.id);
+    "UPDATE ordens SET estado = 'entregue', entregue_em = ?, telemovel = ? WHERE id = ? AND estado = 'pendente'"
+  ).run(Date.now(), numeroNormalizado || null, ordem.id);
   if (!changes) return null;   // outro telemóvel chegou primeiro
 
   return { id: ordem.id, ref: ordem.ref, sequencia: ordem.sequencia, campos: JSON.parse(ordem.campos) };
@@ -603,35 +649,98 @@ function tomarOrdem(clienteId, numeroNormalizado) {
 
 /**
  * O telemóvel desistiu da ordem e diz porquê. Fecha-a já como `falhada`, em vez
- * de a deixar 10 minutos `entregue` até expirar como `sem_confirmacao` — que é o
- * motivo que manda não repetir, quando aqui repetir é seguro.
+ * de a deixar ir para `a_verificar` aos 10 minutos: o telemóvel é o único que
+ * sabe que nada foi submetido, e aqui a falha é certa.
  *
- * Só fecha a que ainda está `entregue`: se a confirmação chegou entretanto, é
- * ela que manda. Devolve se fechou.
+ * Fecha a `entregue` e também a que já passou a `a_verificar` só por falta de
+ * SMS (um aviso atrasado): o que o telemóvel sabe vale mais do que o relógio.
+ * Se a confirmação chegou entretanto, é ela que manda. Devolve se fechou.
  */
 function falharOrdem(id, clienteId, motivo) {
   const { changes } = db.prepare(
     `UPDATE ordens SET estado = 'falhada', motivo = ?,
        notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
-     WHERE id = ? AND cliente_id = ? AND estado = 'entregue'`
-  ).run(motivo, Date.now(), id, clienteId);
+     WHERE id = ? AND cliente_id = ?
+       AND (estado = 'entregue' OR (estado = 'a_verificar' AND motivo = ?))`
+  ).run(motivo, Date.now(), id, clienteId, MOTIVO.SEM_CONFIRMACAO);
   if (changes) notificarPendentes();   // sem await: o telemóvel não espera pelo cliente
   return changes > 0;
 }
 
+/**
+ * O administrador viu o extrato e fecha uma ordem `a_verificar`. É o único
+ * caminho para fora desse estado além do SMS atrasado.
+ *
+ * O contador do callback volta a zero: uma ordem migrada pode já ter esgotado
+ * as tentativas com o estado antigo. Devolve se fechou.
+ */
+function decidirOrdem(id, resultado, tid) {
+  const { changes } = db.prepare(
+    `UPDATE ordens SET estado = ?, motivo = ?, tid = COALESCE(?, tid),
+       notif_tentativas = 0, notificado_em = NULL,
+       notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
+     WHERE id = ? AND estado = 'a_verificar'`
+  ).run(resultado === 'sucesso' ? 'concluida' : 'falhada', MOTIVO.VERIFICACAO_MANUAL,
+        tid || null, Date.now(), id);
+  if (changes) notificarPendentes();
+  return changes > 0;
+}
+
+/**
+ * O cliente só vê três estados, e só dois são fim. Tudo o que ainda pode mudar,
+ * incluindo `a_verificar`, é `em_curso`: o callback só sai com certezas.
+ */
+function estadoPublico(estado) {
+  if (estado === 'concluida') return 'sucesso';
+  if (estado === 'falhada' || estado === 'expirada') return 'falha';
+  return 'em_curso';
+}
+
 /** Como o cliente vê a ordem. Forma pública: mudá-la parte a integração dele. */
-const ordemPublica = (o) => ({
-  ref: o.ref,
-  id: o.id,
-  sequencia: o.sequencia,
-  campos: JSON.parse(o.campos),
-  estado: o.estado,
-  // null quando correu bem ou ainda está a correr; ver MOTIVO.
-  motivo: o.motivo ?? null,
-  tid: o.tid,
-  criado_em: o.criado_em,
-  entregue_em: o.entregue_em,
-});
+function ordemPublica(o) {
+  const estado = estadoPublico(o.estado);
+  return {
+    ref: o.ref,
+    id: o.id,
+    sequencia: o.sequencia,
+    campos: JSON.parse(o.campos),
+    estado,
+    // Só informativo, e só num fim: em curso, o motivo interno ainda pode mudar.
+    motivo: estado === 'em_curso' ? null : o.motivo ?? null,
+    tid: o.tid,
+    criado_em: o.criado_em,
+    entregue_em: o.entregue_em,
+  };
+}
+
+/**
+ * Todas as ordens `a_verificar`, de todos os clientes, para o administrador.
+ * Com o telemóvel que a levou: é nessa carteira que se vê o extrato.
+ */
+function ordensAVerificar() {
+  const bruto = new Map(db.prepare('SELECT numero, bruto FROM numeros').all()
+    .map((n) => [n.numero, n.bruto]));
+  return db.prepare(
+    `SELECT o.id, o.ref, o.campos, o.motivo, o.tid, o.criado_em, o.entregue_em, o.telemovel,
+            c.nome AS cliente
+     FROM ordens o JOIN clientes c ON c.id = o.cliente_id
+     WHERE o.estado = 'a_verificar' ORDER BY o.id ASC`
+  ).all().map((o) => {
+    const campos = JSON.parse(o.campos);
+    return {
+      id: o.id,
+      ref: o.ref,
+      cliente: o.cliente,
+      valor: campos.valor ?? null,
+      iban_ultimos5: campos.iban ? String(campos.iban).slice(-5) : null,
+      telemovel: o.telemovel ? bruto.get(o.telemovel) ?? o.telemovel : null,
+      motivo: o.motivo,
+      tid: o.tid,
+      criado_em: o.criado_em,
+      entregue_em: o.entregue_em,
+    };
+  });
+}
 
 // --- consultas -------------------------------------------------------------
 
@@ -666,7 +775,10 @@ function ordensDoPainel(clienteId) {
     `SELECT COUNT(*) AS falhadas FROM ordens
      WHERE cliente_id = ? AND estado IN ('falhada', 'expirada') AND criado_em > ?`
   ).get(clienteId, Date.now() - 24 * 3600e3);
-  return { itens, falhadas };
+  const { a_verificar } = db.prepare(
+    "SELECT COUNT(*) AS a_verificar FROM ordens WHERE cliente_id = ? AND estado = 'a_verificar'"
+  ).get(clienteId);
+  return { itens, falhadas, a_verificar };
 }
 
 /** Resumo de um cliente. `saldo` = total transferido com sucesso (ver §5). */
@@ -910,19 +1022,20 @@ async function tratar(req, res) {
 
       // Fecha a ordem que originou esta transferência, se veio por API. Do mesmo
       // cliente a quem a transferência foi atribuída — é por esse que o telemóvel
-      // pede ordens — e só se ainda estava à espera: um `ordem_id` velho ou de
-      // outro cliente é ignorado, nunca um erro — o registo já está gravado.
-      // Um SMS de falha fecha-a como `falhada`: o cliente tem de o saber no
-      // callback, e não ter de ir cruzar o TID com a lista de transferências.
+      // pede ordens — e só se ainda não fechou: um `ordem_id` velho ou de outro
+      // cliente é ignorado, nunca um erro — o registo já está gravado.
+      // Aceita também a `a_verificar`: um SMS atrasado resolve a dúvida sozinho.
+      // Um SMS sem "sucesso" não é uma falha certa (§3): fica `a_verificar`, sem
+      // callback, e o TID fica para o administrador procurar no extrato.
       if (registo.ordem_id) {
         const falhou = registo.estado === 'falha';
         const { changes } = db.prepare(
           `UPDATE ordens SET estado = ?, motivo = ?, tid = ?,
-             notif_proxima = CASE WHEN notify_url IS NOT NULL THEN ? END
-           WHERE id = ? AND cliente_id = ? AND estado = 'entregue'`
-        ).run(falhou ? 'falhada' : 'concluida', falhou ? MOTIVO.FALHA_OPERADOR : null,
-              registo.tid, Date.now(), registo.ordem_id, clienteId);
-        if (changes) notificarPendentes();   // sem await: o telemóvel não espera pelo cliente
+             notif_proxima = CASE WHEN ? AND notify_url IS NOT NULL THEN ? END
+           WHERE id = ? AND cliente_id = ? AND estado IN ('entregue', 'a_verificar')`
+        ).run(falhou ? 'a_verificar' : 'concluida', falhou ? MOTIVO.FALHA_OPERADOR : null,
+              registo.tid, falhou ? 0 : 1, Date.now(), registo.ordem_id, clienteId);
+        if (changes && !falhou) notificarPendentes();   // sem await: o telemóvel não espera pelo cliente
       }
       return json(res, 200, { ok: true });
     } catch (e) {
@@ -1183,6 +1296,58 @@ async function tratar(req, res) {
     return json(res, 200, ordensDoPainel(alvo));
   }
 
+  // Ordens de resultado incerto: o administrador vê o extrato e decide. Só aqui
+  // se fecha uma `a_verificar` à mão, e é isso que dispara o callback.
+  if (url.pathname === '/api/a-verificar') {
+    if (!sessao.admin) return json(res, 403, { erro: 'sem permissão' });
+    expirarOrdens();
+
+    if (req.method === 'GET') return json(res, 200, { itens: ordensAVerificar() });
+
+    if (req.method === 'POST') {
+      const p = JSON.parse(await corpoDe(req, 1024));
+      if (p.resultado !== 'sucesso' && p.resultado !== 'falha') {
+        return json(res, 400, { erro: 'resultado tem de ser sucesso ou falha' });
+      }
+      const tid = String(p.tid ?? '').trim();
+      if (tid && !TID_VALIDO.test(tid)) return json(res, 400, { erro: 'TID inválido' });
+      // 409 e não 200: quem carregou no botão tem de saber que não foi a decisão
+      // dele que ficou (o SMS chegou entretanto, ou outra janela decidiu antes).
+      return decidirOrdem(Number(p.id), p.resultado, tid)
+        ? json(res, 200, { ok: true })
+        : json(res, 409, { erro: 'a ordem já não está a verificar' });
+    }
+  }
+
+  // Um callback de mentira, assinado como os verdadeiros, para o programador do
+  // cliente testar o recetor sem transferir dinheiro. Devolve só o status HTTP:
+  // o corpo da resposta é do sistema dele e não tem de passar por aqui.
+  if (req.method === 'POST' && url.pathname === '/api/callback-teste') {
+    const p = JSON.parse(await corpoDe(req, 2048));
+    const pedido = Number(p.cliente);
+    if (!sessao.admin && pedido && pedido !== sessao.id) return json(res, 403, { erro: 'sem permissão' });
+    const alvo = sessao.admin && pedido ? pedido : sessao.id;
+    const c = db.prepare('SELECT api_hash FROM clientes WHERE id = ? AND admin = 0').get(alvo);
+    if (!c) return json(res, 404, { erro: 'cliente não existe' });
+    if (!c.api_hash) return json(res, 400, { erro: 'sem chave: a assinatura precisa dela' });
+    if (!urlNotificacaoValida(p.url)) return json(res, 400, { erro: 'notify_url inválido' });
+
+    const resultado = p.resultado === 'falha' ? 'falha' : 'sucesso';
+    const agora = Date.now();
+    const corpo = {
+      ref: 'TESTE-CALLBACK',
+      id: 0,
+      sequencia: 'Transferir',
+      campos: { valor: '1', iban: 'AO06…00000' },
+      estado: resultado,
+      motivo: resultado === 'falha' ? MOTIVO.NAO_RECOLHIDA : null,
+      tid: resultado === 'sucesso' ? 'TESTE.0000.000000' : null,
+      criado_em: agora - 30000,
+      entregue_em: resultado === 'sucesso' ? agora - 25000 : null,
+    };
+    return json(res, 200, { status: await enviarCallback(p.url, corpo, c.api_hash), corpo });
+  }
+
   // Transferências vindas de telemóveis que ninguém reclamou, e a sua resolução.
   if (url.pathname === '/api/por-atribuir') {
     if (!sessao.admin) return json(res, 403, { erro: 'sem permissão' });
@@ -1377,5 +1542,5 @@ module.exports = {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db, server,
   validarOrdem, criarOrdem, tomarOrdem, falharOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, ordensDoPainel, MOTIVO,
-  notificarPendentes, NOTIF_MAX_TENTATIVAS,
+  notificarPendentes, NOTIF_MAX_TENTATIVAS, decidirOrdem, ordensAVerificar, estadoPublico,
 };

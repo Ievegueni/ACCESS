@@ -31,6 +31,27 @@
 
 <div id="segredo"></div>
 
+<!-- Antes da lista de clientes de propósito: enquanto aqui houver linhas, há um
+     cliente à espera de um callback que só sai quando alguém decidir. -->
+<section id="secaoAVerificar" hidden>
+  <h2>Ordens a verificar</h2>
+  <p class="nota">
+    O telemóvel levou-as mas não chegou confirmação clara do operador: podem ter
+    corrido ou não. O cliente vê <code>em_curso</code> e não recebe nada até decidires.
+    Confirma no extrato da carteira indicada (valor, IBAN e hora) antes de carregar.
+  </p>
+  <div class="tabela">
+    <table>
+      <thead><tr>
+        <th>Levada</th><th>Cliente · ref</th><th>Telemóvel</th>
+        <th class="num">Valor</th><th class="num">IBAN ·····</th>
+        <th>Porquê</th><th>Há</th><th></th>
+      </tr></thead>
+      <tbody id="linhasAVerificar"></tbody>
+    </table>
+  </div>
+</section>
+
 <div class="tabela">
   <table>
     <thead><tr>
@@ -108,6 +129,64 @@ function mostrarToken(nome, token, numero) {
   segredo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+/** Uma hora à espera de decisão já é um cliente com um levantamento parado. */
+const VERIFICAR_GRAVE_MS = 3600e3;
+
+/** As ordens de resultado incerto, de todos os clientes. Devolve quantas são. */
+async function carregarAVerificar() {
+  const r = await fetch('/api/a-verificar');
+  if (!r.ok) return { n: 0, grave: false };
+  const { itens } = await r.json();
+  secaoAVerificar.hidden = itens.length === 0;
+  const agora = Date.now();
+  linhasAVerificar.innerHTML = itens.map(o => {
+    const idade = agora - (o.entregue_em ?? o.criado_em);
+    return `<tr>
+      <td class="quando">${data(o.entregue_em ?? o.criado_em)}</td>
+      <td>${esc(o.cliente)}<div class="tid">${esc(o.ref)}</div></td>
+      <td class="numero">${esc(o.telemovel ?? '—')}</td>
+      <td class="num dinheiro">${o.valor == null ? '—' : montante(/^\d+$/.test(o.valor) ? Number(o.valor) : null, o.valor)}</td>
+      <td class="num">${esc(o.iban_ultimos5 ?? '—')}</td>
+      <td>${o.motivo === 'falha_operador'
+        ? `SMS sem "sucesso"<div class="tid">${esc(o.tid ?? '')}</div>`
+        : 'sem SMS de confirmação'}</td>
+      <td><span class="pill ${idade > VERIFICAR_GRAVE_MS ? 'grave' : 'aviso'}"><i></i>${duracao(idade)}</span></td>
+      <td class="accoes">
+        <button data-decidir="sucesso" data-id="${o.id}" data-ref="${esc(o.ref)}" data-tid="${esc(o.tid ?? '')}">Correu</button>
+        <button class="perigo" data-decidir="falha" data-id="${o.id}" data-ref="${esc(o.ref)}">Não correu</button>
+      </td>
+    </tr>`;
+  }).join('');
+  return { n: itens.length, grave: itens.some(o => agora - (o.entregue_em ?? o.criado_em) > VERIFICAR_GRAVE_MS) };
+}
+
+// A decisão é o que o cliente vai receber como resultado final: não há volta a
+// dar-lhe depois. Por isso confirma-se sempre, e o sucesso pede o TID do extrato.
+linhasAVerificar.onclick = async (e) => {
+  const b = e.target.closest('button[data-decidir]');
+  if (!b) return;
+  const { decidir: resultado, id, ref } = b.dataset;
+  let tid = '';
+  if (resultado === 'sucesso') {
+    const escrito = prompt(`Confirmar que a ordem ${ref} CORREU.\n\n`
+      + 'O cliente recebe "sucesso" e dá o levantamento por feito.\n'
+      + 'TID da transferência no extrato (opcional):', b.dataset.tid);
+    if (escrito === null) return;
+    tid = escrito.trim();
+  } else if (!confirm(`Confirmar que a ordem ${ref} NÃO correu?\n\n`
+      + 'O cliente recebe "falha" e pode repetir o levantamento. Se afinal tiver corrido, '
+      + 'transfere duas vezes.')) {
+    return;
+  }
+  const r = await fetch('/api/a-verificar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: Number(id), resultado, tid }),
+  });
+  if (!r.ok) alert((await r.json()).erro);
+  carregar();
+};
+
 /** Lista as transferências que chegaram de telemóveis que ninguém reclamou. */
 async function carregarPorAtribuir(reais) {
   const { itens } = await (await fetch('/api/por-atribuir')).json();
@@ -157,6 +236,7 @@ async function carregar() {
   const { clientes } = await r.json();
   const reais = clientes.filter(c => !c.admin);
   carregarPorAtribuir(reais);
+  const verificar = await carregarAVerificar();
 
   const soma = (f) => reais.reduce((t, c) => t + f(c), 0);
   const calado = reais.filter(c => gravidade(c.saude, c.criado_em) === 'grave').length;
@@ -170,6 +250,7 @@ async function carregar() {
     estatistica('Últimas 24 h', kz(soma(c => c.dia.v)))
     + estatistica('Nº com sucesso', soma(c => c.total.n))
     + estatistica('A rever', rever, rever ? 'alerta' : '')
+    + estatistica('Ordens a verificar', verificar.n, verificar.grave ? 'grave' : verificar.n ? 'alerta' : '')
     // um cliente calado é uma app parada: é aqui que se vê sem abrir cliente a cliente
     + estatistica('Sem dar sinal', calado, calado ? 'grave' : '');
 

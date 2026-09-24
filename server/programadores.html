@@ -93,7 +93,7 @@
       <tr><td><code>numero</code></td><td data-t="dev.nao">Não</td>
           <td data-t="dev.api.c.numero">Por que destino tem de sair. Sem ele, qualquer um dos vossos</td></tr>
       <tr><td><code>notify_url</code></td><td data-t="dev.nao">Não</td>
-          <td data-t="dev.api.c.notify">URL <code>https://</code> vosso. Quando a ordem fica <code>concluida</code>, <code>falhada</code> ou <code>expirada</code>, fazemos-lhe um <code>POST</code> com o mesmo corpo da consulta de estado</td></tr>
+          <td data-t="dev.api.c.notify">URL <code>https://</code> vosso. Quando a ordem acaba em <code>sucesso</code> ou <code>falha</code>, fazemos-lhe um <code>POST</code> com o mesmo corpo da consulta de estado</td></tr>
     </tbody>
   </table>
 
@@ -104,7 +104,7 @@
   "id": 17,
   "sequencia": "Transferir",
   "campos": { "valor": "5000", "iban": "AO06…219" },
-  "estado": "concluida",
+  "estado": "sucesso",
   "motivo": null,
   "tid": "MP260921.2313.B09562",
   "criado_em": 1758496380000,
@@ -114,31 +114,33 @@
   <table class="parametros">
     <thead><tr><th data-t="dev.api.est">Estado</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
     <tbody>
-      <tr><td><code>pendente</code></td><td data-t="dev.api.s.pendente">Em fila, ainda não foi entregue</td>
-          <td data-t="dev.api.s.pendente.f">Esperar.</td></tr>
-      <tr><td><code>entregue</code></td><td data-t="dev.api.s.entregue">A ser executada neste momento</td>
-          <td data-t="dev.api.s.entregue.f">Esperar.</td></tr>
-      <tr><td><code>concluida</code></td><td data-t="dev.api.s.concluida">Confirmada, com <code>tid</code></td>
-          <td data-t="dev.api.s.concluida.f">Ver o <code>estado</code> da transferência na secção 4.</td></tr>
-      <tr><td><code>falhada</code></td><td data-t="dev.api.s.falhada">O operador respondeu sem confirmar sucesso. O <code>motivo</code> diz porquê</td>
-          <td data-t="dev.api.s.falhada.f">Depende do <code>motivo</code>, abaixo.</td></tr>
-      <tr><td><code>expirada</code></td><td data-t="dev.api.s.expirada">Dez minutos sem fechar. O <code>motivo</code> diz porquê</td>
-          <td data-t="dev.api.s.expirada.f">Depende do <code>motivo</code>, abaixo.</td></tr>
+      <tr><td><code>em_curso</code></td><td data-t="dev.api.s.emCurso">Ainda não acabou: em fila, a ser executada, ou em verificação do nosso lado</td>
+          <td data-t="dev.api.s.emCurso.f">Esperar pelo aviso. Não criar outra ordem para o mesmo levantamento.</td></tr>
+      <tr><td><code>sucesso</code></td><td data-t="dev.api.s.sucesso">A transferência foi feita. <code>tid</code> é o identificador do operador</td>
+          <td data-t="dev.api.s.sucesso.f">Dar o levantamento por pago.</td></tr>
+      <tr><td><code>falha</code></td><td data-t="dev.api.s.falha">A transferência <b>não</b> foi feita. Nenhum dinheiro saiu</td>
+          <td data-t="dev.api.s.falha.f">Dar o levantamento por falhado. Pode repetir-se, com <code>ref</code> nova.</td></tr>
     </tbody>
   </table>
 
-  <p class="nota" data-t="dev.api.motivo.nota">Quando a ordem não fecha bem, <code>motivo</code> diz porquê. Nas outras é <code>null</code>.</p>
+  <p class="nota" data-t="dev.api.estados.nota">Só <code>sucesso</code> e <code>falha</code> são finais, e nunca mudam
+     depois. Nunca enviamos um resultado incerto: quando o operador não confirma com
+     clareza, verificamos do nosso lado antes de fechar a ordem, e ela continua
+     <code>em_curso</code> até lá.</p>
+
+  <p class="nota" data-t="dev.api.motivo.nota">O <code>motivo</code> é só informativo e só aparece nos estados finais.
+     A vossa lógica deve decidir pelo <code>estado</code>.</p>
   <table class="parametros">
-    <thead><tr><th data-t="dev.api.motivo">Motivo</th><th data-t="dev.e.significa">Significa</th><th data-t="dev.e.fazer">O que fazer</th></tr></thead>
+    <thead><tr><th data-t="dev.api.motivo">Motivo</th><th data-t="dev.api.est">Estado</th><th data-t="dev.e.significa">Significa</th></tr></thead>
     <tbody>
-      <tr><td><code>nao_recolhida</code></td><td data-t="dev.api.m.naoRecolhida">Nenhum destino a foi buscar em dez minutos (sem rede, desligado). Nada foi executado</td>
-          <td data-t="dev.api.m.naoRecolhida.f">Pode repetir-se, com <code>ref</code> nova.</td></tr>
-      <tr><td><code>sem_confirmacao</code></td><td data-t="dev.api.m.semConfirmacao">Foi executada e a confirmação do operador não chegou em dez minutos</td>
-          <td data-t="dev.api.m.semConfirmacao.f">Não repetir às cegas: ver primeiro na secção 4.</td></tr>
-      <tr><td><code>falha_operador</code></td><td data-t="dev.api.m.falhaOperador">A confirmação chegou sem a palavra "sucesso"</td>
-          <td data-t="dev.api.m.falhaOperador.f">Ver a transferência na secção 4 pelo <code>tid</code>.</td></tr>
-      <tr><td><code>operador_indisponivel</code></td><td data-t="dev.api.m.operadorIndisponivel">O operador respondeu "serviço indisponível" antes de o valor ser enviado. Tentámos mais 3 vezes, de 30 em 30 s. Nada foi executado</td>
-          <td data-t="dev.api.m.operadorIndisponivel.f">Pode repetir-se, com <code>ref</code> nova.</td></tr>
+      <tr><td><code>null</code></td><td><code>sucesso</code></td>
+          <td data-t="dev.api.m.nulo">Confirmada pelo operador</td></tr>
+      <tr><td><code>verificacao_manual</code></td><td><code>sucesso</code> · <code>falha</code></td>
+          <td data-t="dev.api.m.verificacaoManual">O operador não confirmou com clareza e verificámos no extrato da conta</td></tr>
+      <tr><td><code>nao_recolhida</code></td><td><code>falha</code></td>
+          <td data-t="dev.api.m.naoRecolhida">Nenhum destino a foi buscar em dez minutos (sem rede, desligado). Nada foi executado</td></tr>
+      <tr><td><code>operador_indisponivel</code></td><td><code>falha</code></td>
+          <td data-t="dev.api.m.operadorIndisponivel">O operador respondeu "serviço indisponível" antes de o valor ser enviado. Tentámos mais 3 vezes, de 30 em 30 s. Nada foi executado</td></tr>
     </tbody>
   </table>
 
@@ -152,6 +154,9 @@
 
   <div class="regra">
     <b data-t="dev.api.r5.t">Com <code>notify_url</code> não precisam de consultar o estado</b>
+    <p data-t="dev.api.r5.d0">Recebem um aviso por ordem, e só quando ela acaba em <code>sucesso</code>
+       ou <code>falha</code>. A maioria acaba em segundos; uma que precise de verificação
+       pode levar mais tempo (até algumas horas).</p>
     <p data-t="dev.api.r5.d">Respondam <code>2xx</code> para confirmar a receção. Com outra resposta,
        ou sem resposta em 10 s, repetimos com espera a dobrar desde 30 s, até 8 vezes
        (cerca de 2 h). Podem receber o mesmo aviso mais de uma vez: tratem-no pela
@@ -161,6 +166,17 @@
     <pre><code>const segredo = crypto.createHash('sha256').update(CHAVE_AK).digest('hex');
 const esperado = crypto.createHmac('sha256', segredo).update(corpoBruto).digest('hex');
 if (esperado !== req.headers['x-assinatura']) return res.status(401).end();</code></pre>
+    <p data-t="dev.api.teste.d">Para testar o vosso recetor sem fazer transferências, enviem daqui um aviso
+       de teste: vai assinado com a vossa chave, com <code>ref</code> <code>TESTE-CALLBACK</code>.</p>
+    <form id="formTeste" class="teste">
+      <input name="url" type="url" placeholder="https://…" required>
+      <select name="resultado">
+        <option value="sucesso">sucesso</option>
+        <option value="falha">falha</option>
+      </select>
+      <button data-t="dev.api.teste.enviar">Enviar aviso de teste</button>
+    </form>
+    <div id="resultadoTeste"></div>
   </div>
 
   <div class="regra">
@@ -170,19 +186,17 @@ if (esperado !== req.headers['x-assinatura']) return res.status(401).end();</cod
   </div>
 
   <div class="regra perigo">
-    <b data-t="dev.api.r3.t"><code>expirada</code> não é repetida sozinha</b>
-    <p data-t="dev.api.r3.d">Com <code>motivo</code> <code>sem_confirmacao</code>, a operação pode
-       ter corrido até ao fim e ter-se perdido só a confirmação — por isso nunca a
-       repetimos automaticamente. Antes de criar outra ordem, verifiquem na listagem
-       da secção 4 se a transferência aconteceu. Com <code>nao_recolhida</code> nada
-       correu e podem repetir.</p>
+    <b data-t="dev.api.r3.t">Nunca criem uma <code>ref</code> nova enquanto a ordem estiver <code>em_curso</code></b>
+    <p data-t="dev.api.r3.d">É a única forma de pagar o mesmo levantamento duas vezes. Uma ordem
+       <code>em_curso</code> há muito tempo está em verificação: esperem pelo aviso. Só
+       depois de <code>falha</code> se repete, e aí com <code>ref</code> nova.</p>
   </div>
 
   <div class="regra perigo">
     <b data-t="dev.api.r4.t">Aceite não quer dizer executada</b>
     <p data-t="dev.api.r4.d"><code>201</code> diz que a ordem foi registada, nada mais. O resultado só
-       existe quando o estado passa a <code>concluida</code> e traz o
-       <code>tid</code>. Não deem o levantamento por feito antes disso.</p>
+       existe quando o estado passa a <code>sucesso</code>. Não deem o levantamento por
+       feito antes disso.</p>
   </div>
 </section>
 
@@ -498,6 +512,31 @@ async function gerarChave() {
     </div>`;
   exemplos(d.chave);
 }
+
+/** Envia um callback de mentira, assinado, e mostra o que o recetor respondeu. */
+formTeste.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(formTeste));
+  resultadoTeste.innerHTML = `<p class="nota">${t('dev.api.teste.aEnviar', 'A enviar…')}</p>`;
+  const r = await fetch('/api/callback-teste', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(clienteId ? { ...f, cliente: clienteId } : f),
+  });
+  const d = await r.json();
+  if (!r.ok) {
+    resultadoTeste.innerHTML = `<p class="falha">${esc(d.erro)}</p>`;
+    return;
+  }
+  const ok = d.status >= 200 && d.status < 300;
+  const estado = d.status == null
+    ? t('dev.api.teste.semResposta', 'sem resposta (rede, DNS ou mais de 10 s)')
+    : `HTTP ${d.status}`;
+  resultadoTeste.innerHTML = `<p class="${ok ? '' : 'falha'}"><b>${esc(estado)}</b> · ${ok
+      ? t('dev.api.teste.aceite', 'aceite: os avisos reais vão ser dados como entregues.')
+      : t('dev.api.teste.recusado', 'não aceite: os avisos reais seriam repetidos até 8 vezes.')}</p>
+    <pre><code>${esc(JSON.stringify(d.corpo, null, 2))}</code></pre>`;
+};
 
 carregar();
 </script>

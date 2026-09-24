@@ -257,6 +257,9 @@ tr.inativo td:not(.accoes) { color: var(--ténue); }
 /* --- menu de acções: popover nativo (top layer, não é cortado pela tabela) - */
 
 td.accoes { text-align: right; width: 1%; }
+/* Decisão de uma ordem a verificar: dois botões lado a lado, o de falha a vermelho. */
+td.accoes button[data-decidir] { white-space: nowrap; margin-left: .35rem; }
+td.accoes button[data-decidir].perigo { color: var(--grave); }
 button.mais {
   border: 0; background: transparent; color: var(--ténue);
   min-height: 36px; padding: .25rem .6rem; line-height: 1; letter-spacing: .1em;
@@ -343,6 +346,10 @@ button.mais:hover { background: var(--fundo); color: var(--texto); }
   border-radius: var(--raio); padding: .9rem 1.05rem; margin: .7rem 0;
 }
 .regra.perigo { border-left-color: var(--aviso); }
+/* Aviso de teste do notify_url, na página de integração. */
+form.teste { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+form.teste input { flex: 1 1 16rem; min-width: 0; }
+#resultadoTeste .falha { color: var(--grave); }
 .regra > b { font-size: .95rem; }
 .regra p { margin: .3rem 0 0; font-size: .89rem; color: var(--suave); }
 

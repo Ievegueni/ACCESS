@@ -7,7 +7,7 @@ const {
   paraNumero, validar, consultar, resumo, cifrar, confere, novoToken,
   normalizarNumero, atribuir, registarNumero, porAtribuir, carteiras, db,
   validarOrdem, expirarOrdens, ORDEM_TIMEOUT_MS, notificarPendentes, NOTIF_MAX_TENTATIVAS,
-  ordensDoPainel, MOTIVO,
+  ordensDoPainel, MOTIVO, ordensAVerificar, estadoPublico,
 } = require('./server.js');
 
 // --- formato angolano: ponto é milhares, vírgula é decimal -----------------
@@ -365,7 +365,7 @@ server.listen(0, async () => {
   const criada = await pedir(base);
   assert.equal(criada.status, 201);
   const o1 = await criada.json();
-  assert.equal(o1.estado, 'pendente');
+  assert.equal(o1.estado, 'em_curso', 'o cliente só vê em_curso, sucesso ou falha');
   assert.deepEqual(o1.campos, { valor: '500', iban: 'AO06.0040' });
 
   // Repetir a mesma ref não cria outra transferência — é a rede do cliente que
@@ -405,7 +405,7 @@ server.listen(0, async () => {
   const verOrdem = (ref, k = chaveA) => fetch(`${P}/api/v1/ordens/${ref}`, {
     headers: { Authorization: `Bearer ${k}` },
   }).then((r) => r.json());
-  assert.equal((await verOrdem('PED-001')).estado, 'entregue');
+  assert.equal((await verOrdem('PED-001')).estado, 'em_curso');
   assert.equal((await fetch(`${P}/api/v1/ordens/NAO-EXISTE`, {
     headers: { Authorization: `Bearer ${chaveA}` },
   })).status, 404);
@@ -418,7 +418,7 @@ server.listen(0, async () => {
   // A confirmação fecha a ordem: é isto que liga o pedido do cliente ao TID.
   assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0001', ordem_id: trabalho.id }), 200);
   const fechada = await verOrdem('PED-001');
-  assert.equal(fechada.estado, 'concluida');
+  assert.equal(fechada.estado, 'sucesso');
   assert.equal(fechada.tid, 'ORD111.0001');
 
   // Um ordem_id velho ou de outro cliente não pode rejeitar a transferência: o
@@ -426,18 +426,28 @@ server.listen(0, async () => {
   assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0002', ordem_id: 999999 }), 200);
   assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0003', ordem_id: 'abc' }), 400, 'mas tem de ser um id');
 
-  // Ordem entregue que nunca deu confirmação expira — e nunca volta a pendente:
-  // reenviar uma transferência sozinho é pior do que não a fazer.
+  // Ordem entregue sem confirmação em 10 min: pode ter corrido. Fica a verificar,
+  // o cliente continua a ver em_curso, e nunca volta à fila.
+  const estadoInterno = (ref) => db.prepare('SELECT estado, motivo, tid FROM ordens WHERE ref = ?').get(ref);
   await pedir({ ref: 'PED-TIMEOUT', sequencia: 'Transferir', campos: { valor: '10' } });
-  const perdida = (await buscar()).status;
-  assert.equal(perdida, 200);
+  const perdida = await buscar();
+  assert.equal(perdida.status, 200);
+  const idPerdida = (await perdida.json()).id;
   db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'PED-TIMEOUT'")
     .run(Date.now() - ORDEM_TIMEOUT_MS - 1);
   expirarOrdens();
-  const expirada = await verOrdem('PED-TIMEOUT');
-  assert.equal(expirada.estado, 'expirada');
-  assert.equal(expirada.motivo, MOTIVO.SEM_CONFIRMACAO, 'correu: repetir pode transferir duas vezes');
-  assert.equal((await buscar()).status, 204, 'expirada não volta à fila');
+  assert.deepEqual({ ...estadoInterno('PED-TIMEOUT') },
+    { estado: 'a_verificar', motivo: MOTIVO.SEM_CONFIRMACAO, tid: null });
+  const incerta = await verOrdem('PED-TIMEOUT');
+  assert.equal(incerta.estado, 'em_curso', 'incerto não é fim');
+  assert.equal(incerta.motivo, null, 'o motivo interno não sai enquanto está em curso');
+  assert.equal((await buscar()).status, 204, 'a verificar não volta à fila');
+
+  // O SMS atrasado resolve a dúvida sozinho: antes, ao minuto 11 já não fechava nada.
+  assert.equal(await envia(t2, { ...bom, tid: 'ORD111.0004', ordem_id: idPerdida }), 200);
+  const tardia = await verOrdem('PED-TIMEOUT');
+  assert.equal(tardia.estado, 'sucesso');
+  assert.equal(tardia.tid, 'ORD111.0004');
 
   // Pendente que nenhum telemóvel foi buscar também expira: um telemóvel sem rede
   // de madrugada levava-a horas depois e transferia quando já ninguém a queria.
@@ -445,14 +455,14 @@ server.listen(0, async () => {
   db.prepare("UPDATE ordens SET criado_em = ? WHERE ref = 'PED-ORFA'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
   assert.equal((await buscar()).status, 204, 'o telemóvel que volta não a leva');
   const orfa = await verOrdem('PED-ORFA');
-  assert.equal(orfa.estado, 'expirada');
-  assert.equal(orfa.motivo, MOTIVO.NAO_RECOLHIDA, 'nada correu: repetir é seguro');
+  assert.equal(orfa.estado, 'falha', 'nada correu: é uma falha certa');
+  assert.equal(orfa.motivo, MOTIVO.NAO_RECOLHIDA);
   assert.equal(orfa.entregue_em, null);
 
   // Uma pendente recente fica; só a idade conta.
   await pedir({ ref: 'PED-NOVA', sequencia: 'Transferir', campos: { valor: '11' } });
   expirarOrdens();
-  assert.equal((await verOrdem('PED-NOVA')).estado, 'pendente');
+  assert.equal((await verOrdem('PED-NOVA')).estado, 'em_curso');
   assert.equal((await buscar()).status, 200);
 
   // Long-poll: o pedido fica à espera e devolve mal a ordem chegue.
@@ -484,17 +494,27 @@ server.listen(0, async () => {
     'o telemóvel não escolhe os motivos do servidor');
   assert.equal((await desistir(indisp.id, { motivo: 'operador_indisponivel' }, 'token-errado')).status, 401);
   assert.equal((await desistir(indisp.id, { motivo: 'operador_indisponivel', numero: '924111222' })).status, 200);
-  assert.equal((await verOrdem('PED-INDISP')).estado, 'entregue', 'um telemóvel do B não fecha a ordem do A');
+  assert.equal((await verOrdem('PED-INDISP')).estado, 'em_curso', 'um telemóvel do B não fecha a ordem do A');
   const r1 = await (await desistir(indisp.id, { motivo: 'operador_indisponivel' })).json();
   assert.equal(r1.fechada, true);
   const falhou = await verOrdem('PED-INDISP');
-  assert.equal(falhou.estado, 'falhada');
+  assert.equal(falhou.estado, 'falha');
   assert.equal(falhou.motivo, MOTIVO.OPERADOR_INDISPONIVEL);
   const r2 = await (await desistir(indisp.id, { motivo: 'operador_indisponivel' })).json();
   assert.equal(r2.fechada, false, 'repetir o aviso é inofensivo');
   // A que já fechou por SMS não é desfeita por um aviso atrasado.
   assert.equal((await desistir(trabalho.id, { motivo: 'operador_indisponivel' })).status, 200);
-  assert.equal((await verOrdem('PED-001')).estado, 'concluida');
+  assert.equal((await verOrdem('PED-001')).estado, 'sucesso');
+
+  // O aviso do telemóvel chega depois dos 10 min: ainda fecha, porque o telemóvel
+  // sabe que nada foi submetido e o relógio não.
+  await pedir({ ref: 'PED-INDISP-TARDE', sequencia: 'Transferir', campos: { valor: '6' } });
+  const indispTarde = await (await buscar()).json();
+  db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'PED-INDISP-TARDE'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+  expirarOrdens();
+  assert.equal(estadoInterno('PED-INDISP-TARDE').estado, 'a_verificar');
+  assert.equal((await (await desistir(indispTarde.id, { motivo: 'operador_indisponivel' })).json()).fechada, true);
+  assert.equal((await verOrdem('PED-INDISP-TARDE')).estado, 'falha');
 
   // --- notify_url: o painel avisa o cliente quando a ordem fecha ----------------
   assert.equal((await pedir({ ...base, ref: 'N-0', notify_url: 'http://cliente.exemplo/cb' })).status, 400,
@@ -524,7 +544,7 @@ server.listen(0, async () => {
     assert.equal(avisos.length, 1);
     const aviso = JSON.parse(avisos[0].corpo);
     assert.equal(aviso.ref, 'N-1');
-    assert.equal(aviso.estado, 'concluida');
+    assert.equal(aviso.estado, 'sucesso');
     assert.equal(aviso.motivo, null);
     assert.equal(aviso.tid, 'NOT111.0001');
     const { createHash, createHmac } = require('node:crypto');
@@ -533,25 +553,103 @@ server.listen(0, async () => {
     await notificarPendentes();
     assert.equal(avisos.length, 1, 'aceite uma vez, não repete');
 
-    // SMS de falha: o cliente sabe-o pelo callback, sem ter de cruzar o TID.
+    // SMS sem "sucesso" não é falha certa (§3): fica a verificar e não avisa ninguém.
     await pedir({ ...base, ref: 'N-FALHA', campos: { valor: '3' }, notify_url: 'https://cliente.exemplo/cb' });
     const tf = await (await buscar()).json();
+    const antesFalha = avisos.length;
     assert.equal(await envia(t2, { ...bom, tid: 'NOT111.0009', estado: 'falha', ordem_id: tf.id }), 200);
     await new Promise((r) => setTimeout(r, 50));
+    await notificarPendentes();
+    assert.equal(avisos.length, antesFalha, 'incerto não gera callback');
+    assert.deepEqual({ ...estadoInterno('N-FALHA') },
+      { estado: 'a_verificar', motivo: MOTIVO.FALHA_OPERADOR, tid: 'NOT111.0009' });
+
+    // Entregue sem SMS em 10 min: também não avisa.
+    await pedir({ ...base, ref: 'N-3', campos: { valor: '8' }, notify_url: 'https://cliente.exemplo/cb' });
+    await buscar();
+    db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'N-3'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+    expirarOrdens();
+    await notificarPendentes();
+    assert.equal(avisos.length, antesFalha, 'sem confirmação também não gera callback');
+
+    // O administrador vê as duas, com o telemóvel que as levou, e decide.
+    const verificar = (metodo, corpo, cookie = cookieAdmin) => fetch(P + '/api/a-verificar', {
+      method: metodo,
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: corpo && JSON.stringify(corpo),
+    });
+    const lista = (await (await verificar('GET')).json()).itens;
+    const nFalha = lista.find((i) => i.ref === 'N-FALHA');
+    const n3 = lista.find((i) => i.ref === 'N-3');
+    assert.ok(nFalha && n3, 'as duas aparecem ao administrador');
+    assert.equal(nFalha.cliente, 'Cliente A');
+    assert.equal(nFalha.tid, 'NOT111.0009');
+    assert.ok(!JSON.stringify(lista).includes('AO06.0040'), 'o IBAN inteiro não sai');
+    assert.equal(lista.length, ordensAVerificar().length);
+
+    assert.equal((await verificar('POST', { id: nFalha.id, resultado: 'talvez' })).status, 400);
+    assert.equal((await verificar('POST', { id: nFalha.id, resultado: 'falha', tid: 'a b' })).status, 400);
+    assert.equal((await verificar('POST', { id: nFalha.id, resultado: 'falha' })).status, 200);
+    await new Promise((r) => setTimeout(r, 50));
     const avisoFalha = JSON.parse(avisos.at(-1).corpo);
+    assert.equal(avisos.length, antesFalha + 1);
     assert.equal(avisoFalha.ref, 'N-FALHA');
-    assert.equal(avisoFalha.estado, 'falhada');
-    assert.equal(avisoFalha.motivo, MOTIVO.FALHA_OPERADOR);
-    assert.equal(avisoFalha.tid, 'NOT111.0009', 'o TID vai na mesma, para o cliente verificar');
+    assert.equal(avisoFalha.estado, 'falha');
+    assert.equal(avisoFalha.motivo, MOTIVO.VERIFICACAO_MANUAL);
+    assert.equal(avisoFalha.tid, 'NOT111.0009', 'o TID vai na mesma');
+    assert.equal((await verificar('POST', { id: nFalha.id, resultado: 'sucesso' })).status, 409,
+      'decidida é decidida: a segunda decisão não passa por cima');
+
+    // Sucesso confirmado à mão, com o TID que o administrador encontrou no extrato.
+    assert.equal((await verificar('POST', { id: n3.id, resultado: 'sucesso', tid: 'EXT111.0003' })).status, 200);
+    await new Promise((r) => setTimeout(r, 50));
+    const avisoN3 = JSON.parse(avisos.at(-1).corpo);
+    assert.equal(avisoN3.ref, 'N-3');
+    assert.equal(avisoN3.estado, 'sucesso');
+    assert.equal(avisoN3.tid, 'EXT111.0003');
+    // Um SMS atrasado depois da decisão não a desfaz.
+    assert.equal(await envia(t2, { ...bom, tid: 'NOT111.0010', estado: 'falha', ordem_id: n3.id }), 200);
+    assert.equal((await verOrdem('N-3')).estado, 'sucesso');
+
+    // O cliente com sessão não decide nada.
+    const loginA = await fetch(P + '/entrar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'cliente=Cliente+A&senha=12345678',
+      redirect: 'manual',
+    });
+    const cookieA = (loginA.headers.get('set-cookie') || '').split(';')[0];
+    assert.ok(cookieA, 'o cliente A entra');
+    assert.equal((await verificar('GET', undefined, cookieA)).status, 403);
+
+    // Callback de teste: assinado como os verdadeiros, sem ordem nenhuma.
+    const testar = (corpo, cookie = cookieA) => fetch(P + '/api/callback-teste', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify(corpo),
+    });
+    respostaCliente = 204;
+    const antesTeste = avisos.length;
+    const teste = await (await testar({ url: 'https://cliente.exemplo/teste', resultado: 'falha' })).json();
+    assert.equal(teste.status, 204);
+    assert.equal(avisos.length, antesTeste + 1);
+    const avisoTeste = avisos.at(-1);
+    assert.equal(JSON.parse(avisoTeste.corpo).ref, 'TESTE-CALLBACK');
+    assert.equal(JSON.parse(avisoTeste.corpo).estado, 'falha');
+    const segredoA = createHash('sha256').update(chaveA).digest('hex');
+    assert.equal(avisoTeste.assinatura, createHmac('sha256', segredoA).update(avisoTeste.corpo).digest('hex'));
+    assert.equal((await testar({ url: 'http://cliente.exemplo/teste' })).status, 400, 'só https');
+    assert.equal((await testar({ url: 'https://cliente.exemplo/teste', cliente: b })).status, 403,
+      'o A não assina com a chave do B');
 
     // Cliente em baixo: tenta de novo quando chega a hora, e desiste ao fim do limite.
+    // Uma pendente que ninguém leva é falha certa, e avisa.
     respostaCliente = 503;
     await pedir({ ...base, ref: 'N-2', campos: { valor: '4' }, notify_url: 'https://cliente.exemplo/cb' });
-    await buscar();
-    db.prepare("UPDATE ordens SET entregue_em = ? WHERE ref = 'N-2'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
+    db.prepare("UPDATE ordens SET criado_em = ? WHERE ref = 'N-2'").run(Date.now() - ORDEM_TIMEOUT_MS - 1);
     expirarOrdens();
     await new Promise((r) => setTimeout(r, 50));
-    assert.equal(JSON.parse(avisos.at(-1).corpo).estado, 'expirada', 'a expiração também avisa');
+    assert.equal(JSON.parse(avisos.at(-1).corpo).estado, 'falha', 'a não recolhida avisa');
     const antes = avisos.length;
     await notificarPendentes();
     assert.equal(avisos.length, antes, 'não repete antes da hora');
@@ -567,8 +665,8 @@ server.listen(0, async () => {
     const linha = (ref) => painel.itens.find((i) => i.ref === ref);
     assert.equal(linha('N-1').aviso, 'aceite');
     assert.equal(linha('N-2').aviso, 'recusado');
-    assert.equal(linha('N-2').motivo, MOTIVO.SEM_CONFIRMACAO);
-    assert.equal(linha('N-FALHA').estado, 'falhada');
+    assert.equal(linha('N-2').motivo, MOTIVO.NAO_RECOLHIDA);
+    assert.equal(linha('N-FALHA').estado, 'falhada', 'o painel mostra o estado interno');
     assert.equal(linha('PED-001').aviso, null, 'sem notify_url não há aviso');
     assert.equal(linha('PED-001').iban_ultimos5, '.0040', 'só a cauda do IBAN');
     assert.ok(!JSON.stringify(painel).includes('AO06.0040'), 'o IBAN inteiro não sai para o painel');
@@ -609,6 +707,64 @@ server.listen(0, async () => {
   assert.equal((await admin({ accao: 'formato', id: b, formato: 'x'.repeat(501) })).status, 400);
   assert.equal(db.prepare('SELECT formato_sms FROM clientes WHERE id = ?').get(b).formato_sms,
     'levantar iban: AO06x valor: 5000', 'o exemplo recusado não substituiu o bom');
+
+  // --- migração: uma BD com as ordens do contrato antigo ------------------------
+  // Os fins incertos passam a a_verificar, e o callback que ia sair com o estado
+  // antigo é cancelado. As certezas ficam como estavam.
+  {
+    const fsm = require('node:fs'), os = require('node:os'), pathm = require('node:path');
+    const { DatabaseSync } = require('node:sqlite');
+    const { execFileSync } = require('node:child_process');
+    const dir = fsm.mkdtempSync(pathm.join(os.tmpdir(), 'access-migr-'));
+    const ficheiro = pathm.join(dir, 'velha.db');
+    const velha = new DatabaseSync(ficheiro);
+    velha.exec(`
+      CREATE TABLE clientes (id INTEGER PRIMARY KEY, nome TEXT NOT NULL UNIQUE, senha TEXT NOT NULL,
+        token_hash TEXT UNIQUE, admin INTEGER NOT NULL DEFAULT 0, ativo INTEGER NOT NULL DEFAULT 1,
+        criado_em INTEGER NOT NULL);
+      INSERT INTO clientes (id, nome, senha, admin, criado_em) VALUES (1, 'admin', 'x:y', 1, 0), (2, 'C', 'x:y', 0, 0);
+      CREATE TABLE "ordens" (
+        id INTEGER PRIMARY KEY, cliente_id INTEGER NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+        ref TEXT NOT NULL, numero TEXT, sequencia TEXT NOT NULL, campos TEXT NOT NULL,
+        estado TEXT NOT NULL CHECK (estado IN ('pendente','entregue','concluida','falhada','expirada')),
+        tid TEXT, criado_em INTEGER NOT NULL, entregue_em INTEGER,
+        notify_url TEXT, notif_tentativas INTEGER NOT NULL DEFAULT 0, notif_proxima INTEGER,
+        motivo TEXT, notificado_em INTEGER, UNIQUE (cliente_id, ref));
+      INSERT INTO ordens (cliente_id, ref, sequencia, campos, estado, motivo, tid, criado_em, notif_proxima) VALUES
+        (2, 'SEM-SMS', 'T', '{}', 'expirada', 'sem_confirmacao', NULL, 1, 5),
+        (2, 'SMS-FALHA', 'T', '{}', 'falhada', 'falha_operador', 'X1.000001', 1, 5),
+        (2, 'ORFA', 'T', '{}', 'expirada', 'nao_recolhida', NULL, 1, NULL),
+        (2, 'INDISP', 'T', '{}', 'falhada', 'operador_indisponivel', NULL, 1, NULL),
+        (2, 'OK', 'T', '{}', 'concluida', NULL, 'X1.000002', 1, NULL);
+    `);
+    // Como em produção: a migração anterior refez a tabela, e o SQLite passou a
+    // guardar o nome entre aspas. Foi isso que partiu a primeira versão desta.
+    assert.match(velha.prepare("SELECT sql FROM sqlite_master WHERE name = 'ordens'").get().sql, /^CREATE TABLE "ordens"/);
+    velha.close();
+    execFileSync(process.execPath, ['-e', "require('./server.js')"], {
+      cwd: __dirname, env: { ...process.env, DB_PATH: ficheiro },
+    });
+    const migrada = new DatabaseSync(ficheiro);
+    const por = Object.fromEntries(migrada.prepare('SELECT ref, estado, notif_proxima, telemovel FROM ordens').all()
+      .map((o) => [o.ref, o]));
+    assert.equal(por['SEM-SMS'].estado, 'a_verificar');
+    assert.equal(por['SEM-SMS'].notif_proxima, null, 'o callback antigo é cancelado');
+    assert.equal(por['SMS-FALHA'].estado, 'a_verificar');
+    assert.equal(por.ORFA.estado, 'expirada');
+    assert.equal(por.INDISP.estado, 'falhada');
+    assert.equal(por.OK.estado, 'concluida');
+    assert.equal(por.OK.telemovel, null, 'a coluna nova existe');
+    migrada.prepare("UPDATE ordens SET estado = 'a_verificar' WHERE ref = 'OK'").run();   // o CHECK aceita-o
+    migrada.close();
+    fsm.rmSync(dir, { recursive: true });
+  }
+
+  assert.equal(estadoPublico('pendente'), 'em_curso');
+  assert.equal(estadoPublico('entregue'), 'em_curso');
+  assert.equal(estadoPublico('a_verificar'), 'em_curso');
+  assert.equal(estadoPublico('concluida'), 'sucesso');
+  assert.equal(estadoPublico('falhada'), 'falha');
+  assert.equal(estadoPublico('expirada'), 'falha');
 
   server.close();
   console.log('ok');

@@ -196,16 +196,21 @@ function pillOrdem(estado) {
     concluida: ['', t('ord.concluida', 'concluída')],
     falhada: ['grave', t('ord.falhada', 'falhada')],
     expirada: ['grave', t('ord.expirada', 'expirada')],
+    a_verificar: ['aviso', t('ord.aVerificar', 'em verificação')],
   }[estado] ?? ['aviso', esc(estado)];
   return `<span class="pill ${classe}"><i></i>${texto}</span>`;
 }
 
-/** A linha que diz ao operador do painel se pode repetir. */
+/**
+ * A linha que diz ao operador do painel se pode repetir. Numa ordem em
+ * verificação o motivo é o porquê da dúvida; o resultado vem depois.
+ */
 function motivoOrdem(motivo) {
   const texto = {
     nao_recolhida: t('ord.m.naoRecolhida', 'nenhum telemóvel a foi buscar: nada foi executado'),
-    sem_confirmacao: t('ord.m.semConfirmacao', 'executada sem SMS de confirmação: verificar antes de repetir'),
-    falha_operador: t('ord.m.falhaOperador', 'o operador respondeu sem "sucesso"'),
+    sem_confirmacao: t('ord.m.semConfirmacao', 'executada sem SMS de confirmação: estamos a verificar, não repetir'),
+    falha_operador: t('ord.m.falhaOperador', 'o operador respondeu sem "sucesso": estamos a verificar, não repetir'),
+    verificacao_manual: t('ord.m.verificacaoManual', 'resultado confirmado por nós no extrato'),
     operador_indisponivel: t('ord.m.operadorIndisponivel', 'operador indisponível, repetido sem êxito: nada foi executado'),
   }[motivo];
   return texto ? `<span class="motivo">${texto}</span>` : '';

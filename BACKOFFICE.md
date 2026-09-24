@@ -303,30 +303,35 @@ com mão pesada — vão ser escritos numa caixa USSD e mostrados no painel.
 
 ### `GET /api/v1/ordens/<ref>` — estado
 
-O mesmo corpo. `estado` é um de:
+O mesmo corpo. O cliente só vê três estados, e só dois são fim:
 
-| Estado | Significa |
-|---|---|
-| `pendente` | à espera que um telemóvel a leve |
-| `entregue` | um telemóvel levou-a e está a marcar |
-| `concluida` | chegou a confirmação com "sucesso"; `tid` preenchido |
-| `falhada` | chegou a confirmação sem "sucesso" (§3), com `tid` e `motivo: falha_operador`; ou o operador esteve indisponível, sem `tid` e com `motivo: operador_indisponivel` |
-| `expirada` | passaram 10 minutos sem fechar — o `motivo` diz porquê, ver abaixo |
+| `estado` público | Estados internos | Significa |
+|---|---|---|
+| `em_curso` | `pendente`, `entregue`, `a_verificar` | ainda pode mudar; não há callback |
+| `sucesso` | `concluida` | a transferência foi feita |
+| `falha` | `falhada`, `expirada` | **certeza** de que nada saiu; o cliente pode repetir com `ref` nova |
 
-`motivo` é `null` salvo nestes casos:
+Pedido do cliente em 2026-09-24: um callback com resultado incerto
+(`expirada` + `sem_confirmacao`) não lhe serve, porque não sabe o que fazer com
+ele. Por isso os fins incertos já não são fins: ficam `a_verificar`, o cliente
+continua a ver `em_curso`, e o callback só sai quando houver certeza (ver
+"Ordens a verificar" abaixo). A forma pública é feita em `estadoPublico()`; o
+painel e a BD continuam com os estados internos.
 
-| `motivo` | Estado | Significa | Repetir? |
+`motivo` é só informativo e só sai nos fins (em `em_curso` é sempre `null`):
+
+| `motivo` | Estado interno | Público | Significa |
 |---|---|---|---|
-| `nao_recolhida` | `expirada` | 10 min `pendente`: nenhum telemóvel a foi buscar | Sim, nada correu |
-| `sem_confirmacao` | `expirada` | 10 min `entregue` sem SMS do operador | Só depois de verificar |
-| `falha_operador` | `falhada` | SMS com TID mas sem "sucesso" | Só depois de verificar |
-| `operador_indisponivel` | `falhada` | caixa de erro do operador antes de o valor ser escrito, 3 repetições sem êxito | Sim, nada correu |
+| `nao_recolhida` | `expirada` | `falha` | 10 min `pendente`: nenhum telemóvel a foi buscar |
+| `operador_indisponivel` | `falhada` | `falha` | caixa de erro do operador antes de o valor ser escrito, 3 repetições sem êxito |
+| `sem_confirmacao` | `a_verificar` | `em_curso` | 10 min `entregue` sem SMS do operador: pode ter corrido |
+| `falha_operador` | `a_verificar` | `em_curso` | SMS com TID mas sem "sucesso" (§3): pode ser texto que o parser não conhece |
+| `verificacao_manual` | `concluida` ou `falhada` | `sucesso` ou `falha` | o administrador viu o extrato e decidiu |
 
 A pendente expira porque, antes, esperava para sempre: em 2026-09-24 um telemóvel
 sem ligação durante a noite foi buscar uma ordem **14 h** depois de criada e
-executou-a. `falhada` existe porque o cliente pediu para saber da falha no
-callback; antes a ordem ficava `concluida` e só cruzando o TID com a listagem se
-via que a transferência era `falha`.
+executou-a. Um SMS sem "sucesso" já não fecha a ordem como `falhada`: pelo §3
+isso não é uma falha certa, e dizer `falha` ao cliente fazia-o repetir.
 
 `GET /api/v1/ordens?desde=<id>` lista, paginado por `id`.
 
@@ -346,8 +351,10 @@ OK e liberta-se. O que acontece a seguir depende de o valor já ter sido escrito
   de 30 s, até 3 vezes. Se todas falharem, faz
   `POST /api/telemovel/ordens/<id>/falha {motivo: "operador_indisponivel", numero}`
   e a ordem fecha logo como `falhada`, com callback. O cliente pode repetir.
+  Se o aviso chegar depois de a ordem já ter passado a `a_verificar` por falta de
+  SMS, ainda fecha: o telemóvel sabe que nada foi submetido, o relógio não.
 - **Depois do `{valor}`**: pode ter corrido. Não repete e não avisa; a ordem segue
-  o caminho de sempre (confirmação por SMS, ou `sem_confirmacao` aos 10 min).
+  o caminho de sempre (confirmação por SMS, ou `a_verificar` aos 10 min).
 
 Porque é o telemóvel a repetir e não o sistema do cliente: é o único que sabe em
 que passo apareceu o erro. Do lado de fora só se vê `entregue`, e repetir às
@@ -369,9 +376,9 @@ telemóvel continua a tentar.
 
 ### `notify_url` — o painel avisa o cliente
 
-Pedido do cliente: consultar o estado em ciclo não escala. Quando a ordem passa a
-`concluida`, `falhada` ou `expirada`, o painel faz `POST` ao `notify_url` com o mesmo corpo
-do `GET /api/v1/ordens/<ref>`.
+Pedido do cliente: consultar o estado em ciclo não escala. Quando a ordem chega a
+`sucesso` ou `falha` (públicos), o painel faz `POST` ao `notify_url` com o mesmo
+corpo do `GET /api/v1/ordens/<ref>`. `a_verificar` não avisa.
 
 - **Assinatura:** `X-Assinatura` = HMAC-SHA256 hex do corpo, com chave
   `sha256hex(ak_…)`. O servidor só guarda o hash da chave, e é exatamente esse o
@@ -386,26 +393,58 @@ do `GET /api/v1/ordens/<ref>`.
 - A expiração passou a correr também num `setInterval` de 30 s: sem ninguém a
   consultar, uma ordem num telemóvel morto nunca expirava nem era avisada.
 
+- **Callback de teste:** `POST /api/callback-teste {url, resultado}` (sessão do
+  cliente, ou do admin com `cliente`) envia um corpo de mentira com
+  `ref: "TESTE-CALLBACK"`, assinado como os reais, e devolve o status HTTP que o
+  recetor respondeu. Está na página de programadores, junto ao `notify_url`.
+
+### Ordens a verificar: quem decide é o administrador
+
+Uma ordem fica `a_verificar` quando o telemóvel a levou e não há confirmação
+clara: 10 min sem SMS (`sem_confirmacao`) ou SMS sem "sucesso" (`falha_operador`).
+Sai de lá de duas maneiras:
+
+- **O SMS chega atrasado.** O webhook fecha `entregue` **e** `a_verificar`: com
+  "sucesso" passa a `concluida` e avisa. Um SMS sem "sucesso" deixa-a onde está.
+- **O administrador decide** na secção **Ordens a verificar** do `admin.html`
+  (`GET`/`POST /api/a-verificar`): vê cliente, `ref`, telemóvel que a levou
+  (coluna `ordens.telemovel`, para saber em que carteira ir ao extrato), valor,
+  cauda do IBAN e há quanto tempo está parada; carrega em **Correu** (com o TID
+  do extrato, opcional) ou **Não correu**. Fica `concluida`/`falhada` com
+  `motivo: verificacao_manual`, e o callback sai com o contador a zero.
+
+Só se decide uma vez: a segunda decisão, ou uma decisão sobre uma ordem que o
+SMS já fechou, dá `409`. Um SMS que chegue **depois** de uma decisão não a
+desfaz; fica na lista de transferências. Se disser o contrário da decisão, o
+cliente já recebeu o fim errado: resolve-se fora do sistema. Por isso, "Não
+correu" só depois de ver o extrato.
+
+Na faixa de topo do admin, **Ordens a verificar** fica amarela com qualquer
+ordem e vermelha com uma parada há mais de 1 h: é um levantamento do cliente
+parado à espera de ti.
+
 ### No painel
 
 Secção **Ordens por API** (só aparece a quem tem ordens): as últimas 50, com
-estado, motivo em texto, TID e se o callback foi recebido. Dos `campos` só se
-mostram o valor e os 5 últimos do IBAN. Na faixa de topo, **Ordens falhadas
-(24 h)** conta as `falhada` + `expirada`.
+estado interno (`a_verificar` aparece como "em verificação"), motivo em texto,
+TID e se o callback foi recebido. Dos `campos` só se mostram o valor e os 5
+últimos do IBAN. Na faixa de topo, **Ordens falhadas (24 h)** conta as
+`falhada` + `expirada`.
 
-### `expirada` nunca volta a `pendente`
+### Nada volta a `pendente`
 
-Uma ordem entregue a um telemóvel que depois morre fica `expirada` ao fim de 10
-minutos. **Não é reenviada automaticamente.** A sequência pode ter corrido até ao
-fim e ter-se perdido só o SMS; repetir sozinho seria transferir duas vezes. Quem
-repete é o cliente, com uma `ref` nova, depois de ver o estado.
+**Nenhuma ordem é reenviada automaticamente.** A sequência pode ter corrido até
+ao fim e ter-se perdido só o SMS; repetir sozinho seria transferir duas vezes.
+Quem repete é o cliente, com uma `ref` nova, depois de receber `falha`.
 
 ### O que isto não resolve
 
 - A confirmação continua a depender do SMS do operador. Se os SMS que falham são
   os *dele*, isto não muda nada — vale a pena saber qual dos dois falha.
 - Sequência mal configurada no telemóvel: a ordem é aceite e nunca executa. O
-  sintoma é `expirada`, mais o "há quanto tempo não chega nada" do §5.
+  sintoma é uma fila de `a_verificar` sem SMS, mais o "há quanto tempo não chega
+  nada" do §5.
+- A verificação é manual. Se ninguém olhar para o admin, o cliente espera.
 
 ## 9. Estado atual
 
@@ -420,6 +459,7 @@ repete é o cliente, com uma `ref` nova, depois de ver o estado.
 | Ordens por API (§8) — app | ✅ `OrderPoller` no serviço; **falta testar no telemóvel** |
 | Ordens por API (§8) — página dos programadores | ✅ secção 1, em pt e zh |
 | `notify_url` nas ordens (§8) | ✅ callback assinado, com novas tentativas; **falta testar contra o sistema do cliente** |
+| Só `sucesso`/`falha` para o cliente (§8) | ✅ `a_verificar` + decisão no admin + callback de teste |
 | Carteiras por telemóvel (§5.1) | ✅ saldo e silêncio por número, no painel |
 | Saldo depois de um carregamento | ⬜ só atualiza na transferência seguinte — o SMS de carregamento ainda não foi visto |
 | Envio ponta-a-ponta contra um servidor | ⬜ testado com `curl`; **falta a app real** contra um URL HTTPS |
