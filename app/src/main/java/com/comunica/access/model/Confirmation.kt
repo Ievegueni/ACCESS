@@ -24,6 +24,8 @@ data class Confirmation(
      * o IBAN completo continuam a nunca sair daqui.
      */
     val saldo: String? = null,
+    /** `sms`, ou `ecra` quando veio da caixa final do USSD (ver [fromResult]). */
+    val origem: String = "sms",
 ) {
     /**
      * [numero] é o número do SIM deste telemóvel, escrito à mão nas definições.
@@ -42,6 +44,7 @@ data class Confirmation(
         .put("estado", if (sucesso) "sucesso" else "falha")
         .put("momento", momento)
         .put("saldo", saldo)
+        .put("origem", origem)
         .apply { numero?.trim()?.takeIf { it.isNotEmpty() }?.let { put("numero", it) } }
         // Só quando a transferência veio de uma ordem da API: é o que a fecha no
         // painel. Omitido, não vazio, nos outros casos.
@@ -77,6 +80,33 @@ data class Confirmation(
         }
 
         // "TID::" traz dois pontos a dobrar no SMS real, daí o ':+'.
+        /**
+         * A caixa final do USSD, logo a seguir ao PIN: "Transferencia KWiK,
+         * Operacao registada. TID: MP260929.2246.B26689. Obrigado...".
+         *
+         * Só traz o TID. O IBAN e o valor são os que a própria app escreveu nos
+         * passos — a caixa aparece na mesma sessão USSD, por isso são dela. O SMS,
+         * quando vier, traz o mesmo TID e o servidor compara os dois.
+         *
+         * Só conta como sucesso com "registada"/"sucesso" explícito: o texto de uma
+         * falha nesta caixa ainda não é conhecido, e aí espera-se pelo SMS.
+         */
+        fun fromResult(text: String, iban: String?, valor: String?, momento: Long): Confirmation? {
+            val tid = TID.find(text)?.groupValues?.get(1)?.trimEnd('.') ?: return null
+            val simples = text.lowercase()
+            if (OK_ECRA.none { it in simples }) return null
+            return Confirmation(
+                tid = tid,
+                ibanUltimos5 = iban?.filter { it.isDigit() }?.takeLast(5)?.takeIf { it.length == 5 },
+                valor = valor?.trim()?.takeIf { it.isNotEmpty() },
+                sucesso = true,
+                momento = momento,
+                origem = "ecra",
+            )
+        }
+
+        private val OK_ECRA = listOf("registada", "sucesso")
+
         private val TID = Regex("""TID:+\s*([A-Za-z0-9.\-]+)""")
         private val IBAN = Regex("""AO\d{2}[\d*]+""")
         private val VALOR = Regex("""\bde\s+([\d.,]+)\s*Kz""", RegexOption.IGNORE_CASE)

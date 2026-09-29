@@ -67,10 +67,13 @@ object OrderPoller {
                 continue
             }
 
-            if (SequenceRunner.running || SequenceLauncher.aRepetir > 0) {
+            if (SequenceRunner.running || SequenceLauncher.aRepetir > 0 ||
+                SequenceRunner.awaitingConfirmation || SequenceRunner.closing
+            ) {
                 // Não se vai buscar o que não se pode executar: a ordem ficaria
                 // marcada como entregue no servidor e expirava à espera. Uma
-                // repetição agendada (operador indisponível) conta como ocupado.
+                // repetição agendada (operador indisponível) conta como ocupado,
+                // e a espera pelo SMS da ordem anterior também.
                 if (!dormir(PAUSA_OCUPADO_MS)) return
                 continue
             }

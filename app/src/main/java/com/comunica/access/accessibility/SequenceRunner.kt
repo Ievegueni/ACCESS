@@ -79,6 +79,52 @@ object SequenceRunner {
     val progress: String
         get() = "$index/${steps.size}"
 
+    /** Quando a última sequência acabou (último passo ou erro do operador). */
+    private var endedAt = 0L
+
+    /** Até quando se espera pela caixa de resultado depois do último passo. */
+    private var closeUntil = 0L
+
+    /**
+     * O último passo foi dado e a caixa de resultado do operador ("Transferência
+     * efetuada... OK") ainda não foi fechada. Deixada aberta, a marcação da ordem
+     * seguinte caía em cima dela e o menu novo não aparecia.
+     */
+    val closing: Boolean
+        get() = closeUntil > 0 && SystemClock.elapsedRealtime() < closeUntil
+
+    /**
+     * Fecha a caixa de resultado com OK e devolve o texto dela, ou null se este
+     * ecrã ainda não é ela. Uma caixa com campo de texto não é um resultado — não
+     * se lhe toca.
+     */
+    fun closeResult(root: AccessibilityNodeInfo): String? {
+        if (!closing) return null
+        val signature = signatureOf(root)
+        if (signature.isEmpty() || signature == lastAnswered) return null
+        if (NodeFinder.findEditable(root) != null) return null
+        val confirm = findConfirm(root) ?: return null
+        if (!confirm.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            Log.w(TAG, "ACTION_CLICK no OK do resultado falhou")
+            return null
+        }
+        closeUntil = 0L
+        lastAnswered = signature
+        return signature
+    }
+
+    /**
+     * Uma ordem acabou de correr e o SMS de confirmação ainda não chegou.
+     *
+     * O [orderId] só é levado pela confirmação: se outra ordem arrancasse antes
+     * dela, o SMS desta fechava a seguinte no painel (com o TID errado) e esta
+     * expirava como `sem_confirmacao` apesar de paga. Ao fim de [ESPERA_SMS_MS]
+     * desiste-se — a ordem expira no painel como antes.
+     */
+    val awaitingConfirmation: Boolean
+        get() = !running && orderId != null && endedAt > 0 &&
+            SystemClock.elapsedRealtime() - endedAt < ESPERA_SMS_MS
+
     fun start(
         sequence: Sequence,
         smsValue: String? = null,
@@ -89,6 +135,8 @@ object SequenceRunner {
         name = sequence.name
         index = 0
         startedAt = SystemClock.elapsedRealtime()
+        endedAt = 0L
+        closeUntil = 0L
         lastAnswered = null
         failure = null
         this.smsValue = smsValue
@@ -104,6 +152,9 @@ object SequenceRunner {
         smsFields = emptyMap()
         orderId = null
     }
+
+    /** Um campo da ordem/SMS em curso, como os passos o viram (`iban`, `valor`). */
+    fun field(name: String): String? = smsFields[name]
 
     /** A ordem em curso, e limpa-a: só a primeira confirmação lhe pertence. */
     fun takeOrderId(): Int? = orderId.also { orderId = null }
@@ -159,10 +210,18 @@ object SequenceRunner {
         // sequência acaba aqui; quem decide se repete é o SequenceLauncher. O
         // orderId fica: se o erro veio depois do valor, a confirmação ainda pode
         // chegar e é ela que fecha a ordem.
-        if (NodeFinder.findEditable(root) == null && UssdFailure.matches(signature)) {
+        //
+        // Também conta como erro qualquer caixa só com OK quando o passo tem de
+        // escrever: nunca vai aceitar a resposta, e a Africell usa textos que a
+        // lista do UssdFailure não conhece — a sequência ficava parada 5 minutos
+        // sem repetir. Passos de só confirmar escrevem-se vazios e não entram aqui.
+        val semCampo = NodeFinder.findEditable(root) == null
+        val precisaEscrever = Step.parse(steps[index]).answer.isNotEmpty()
+        if (semCampo && (UssdFailure.matches(signature) || (confirm != null && precisaEscrever))) {
             confirm?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             failure = Failure(UssdFailure.beforeValue(steps, index), signature)
             Log.w(TAG, "erro do operador no passo ${index + 1}: \"$signature\"")
+            endedAt = SystemClock.elapsedRealtime()
             steps = emptyList()
             index = 0
             lastAnswered = null
@@ -202,6 +261,10 @@ object SequenceRunner {
         }
 
         index++
+        if (index == steps.size) {
+            endedAt = SystemClock.elapsedRealtime()
+            closeUntil = endedAt + FECHO_MS
+        }
         lastAnswered = signature
         return step.answer
     }
@@ -266,6 +329,10 @@ object SequenceRunner {
     private val PLACEHOLDER = Regex("""\{([\p{L}\w]+)\}""")
     /** Uma sequência USSD leva segundos; cinco minutos só se ficou pendurada. */
     private const val MAX_MS = 5 * 60 * 1000L
+    /** O SMS do operador chega em segundos; 90 s cobre rede lenta. */
+    private const val ESPERA_SMS_MS = 90_000L
+    /** A caixa de resultado aparece em segundos depois do PIN. */
+    private const val FECHO_MS = 60_000L
     private const val CONFIRM_ID = "android:id/button1"
     private val CONFIRM_LABELS = listOf("Enviar", "Send", "OK", "Confirmar", "Submit", "Continuar")
     private const val TAG = "AutomationService"

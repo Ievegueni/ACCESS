@@ -23,6 +23,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Sem interface: acorda e desbloqueia o ecrã antes de marcar. -->
+        <activity
+            android:name=".WakeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <receiver
             android:name=".sms.SmsTrigger"
             android:exported="true"

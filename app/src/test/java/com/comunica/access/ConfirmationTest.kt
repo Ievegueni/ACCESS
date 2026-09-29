@@ -15,6 +15,27 @@ class ConfirmationTest {
             "Taxa: 3.68 Kz. O novo saldo Afrimoney e: 2440.0 Kz. " +
             "TID:: MP260921.2313.B09562. Obrigado por usar o Afrimoney."
 
+    private val caixaFinal = "Mensagem Africell Transferencia KWiK, Operacao registada. " +
+        "TID: MP260929.2246.B26689. Obrigado para usar  Afrimoney. OK"
+
+    @Test
+    fun `a caixa final do ussd confirma com o iban e valor da ordem`() {
+        val c = Confirmation.fromResult(caixaFinal, "AO06004700001234510219", "253", 5L)!!
+        assertEquals("MP260929.2246.B26689", c.tid)
+        assertEquals("10219", c.ibanUltimos5)
+        assertEquals("253", c.valor)
+        assertTrue(c.sucesso)
+        val json = c.toJson("962553560", 42)
+        assertTrue(json.contains("\"origem\":\"ecra\""))
+        assertTrue(json.contains("\"ordem_id\":42"))
+    }
+
+    @Test
+    fun `caixa final sem registada nao confirma`() {
+        assertNull(Confirmation.fromResult("Transferencia KWiK falhou. TID: CT123456. OK", "AO0600", "1", 0L))
+        assertNull(Confirmation.fromResult("Operacao registada. OK", "AO0600", "1", 0L))
+    }
+
     @Test
     fun `le a confirmacao real do operador`() {
         val c = Confirmation.parse(real, 1_000L)!!

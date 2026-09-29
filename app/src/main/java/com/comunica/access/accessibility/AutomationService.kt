@@ -9,6 +9,10 @@ import com.comunica.access.SequenceLauncher
 import com.comunica.access.api.OrderPoller
 import com.comunica.access.data.RulesStore
 import com.comunica.access.model.AutomationRule
+import com.comunica.access.model.Confirmation
+import com.comunica.access.webhook.WebhookConfig
+import com.comunica.access.webhook.WebhookQueue
+import com.comunica.access.webhook.WebhookSender
 
 class AutomationService : AccessibilityService() {
 
@@ -45,6 +49,17 @@ class AutomationService : AccessibilityService() {
         // equivalentes), por isso nunca correspondem ao package de uma regra.
         // A própria Access tem campos de texto e botões: sem esta guarda o runner
         // chegou a inspecionar o formulário de sequências e podia escrever nele.
+        if (SequenceRunner.closing && !SequenceRunner.running && packageName != getPackageName()) {
+            rootInActiveWindow?.let { window ->
+                SequenceRunner.closeResult(window)?.let { text ->
+                    Log.d(TAG, "Resultado fechado: \"$text\"")
+                    RulesStore.log(this, "${SequenceRunner.name} · resultado: \"${text.take(160)}\" · OK")
+                    confirmarPeloEcra(text)
+                }
+            }
+            return
+        }
+
         if (SequenceRunner.running && packageName != getPackageName()) {
             rootInActiveWindow?.let { window ->
                 SequenceRunner.apply(window)?.let { answer ->
@@ -93,6 +108,23 @@ class AutomationService : AccessibilityService() {
             Log.d(TAG, "$outcome — \"${rule.buttonText}\" em $packageName")
             RulesStore.log(this, "$packageName · \"${rule.buttonText}\" · $outcome")
         }
+    }
+
+    /**
+     * A caixa final traz o TID: confirma a ordem já, sem esperar pelo SMS, que às
+     * vezes não chega. Leva o orderId — o SMS que vier depois sai sem ele e o
+     * servidor junta-o a este pelo TID.
+     */
+    private fun confirmarPeloEcra(text: String) {
+        val c = Confirmation.fromResult(
+            text,
+            SequenceRunner.field("iban"),
+            SequenceRunner.field("valor"),
+            System.currentTimeMillis(),
+        ) ?: return
+        WebhookQueue.add(this, c.toJson(WebhookConfig.numero(this), SequenceRunner.takeOrderId()))
+        RulesStore.log(this, "confirmação OK (ecrã) · TID ${c.tid}")
+        WebhookSender.flush(this)
     }
 
     override fun onInterrupt() {

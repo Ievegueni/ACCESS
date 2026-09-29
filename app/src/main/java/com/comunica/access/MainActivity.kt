@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,6 +57,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun run(sequence: Sequence) {
+        // À mão não há SMS nem ordem para preencher `{iban}`, `{valor}`...: a
+        // sequência parava nessa caixa e bloqueava as ordens durante 5 minutos.
+        if (sequence.placeholders.isNotEmpty()) {
+            val campos = sequence.placeholders.joinToString(", ") { "{$it}" }
+            aviso("${sequence.name} usa $campos — só corre por ordem da API ou SMS")
+            return
+        }
+        // Reiniciar o runner apagava os campos da ordem em curso, ou a ordem que
+        // espera o SMS de confirmação.
+        if (SequenceRunner.running) {
+            aviso("${SequenceRunner.name} ainda está a correr (${SequenceRunner.progress})")
+            return
+        }
+        if (SequenceRunner.awaitingConfirmation) {
+            aviso("${SequenceRunner.name} à espera do SMS de confirmação")
+            return
+        }
+
         val needed = buildList {
             if (!granted(Manifest.permission.CALL_PHONE)) add(Manifest.permission.CALL_PHONE)
             // Só pedida para sequências que dependem do trigger por SMS.
@@ -70,6 +89,11 @@ class MainActivity : ComponentActivity() {
             pending = sequence
             requestPermissions.launch(needed.toTypedArray())
         }
+    }
+
+    private fun aviso(texto: String) {
+        Toast.makeText(this, texto, Toast.LENGTH_LONG).show()
+        RulesStore.log(this, texto)
     }
 
     private fun granted(permission: String) =

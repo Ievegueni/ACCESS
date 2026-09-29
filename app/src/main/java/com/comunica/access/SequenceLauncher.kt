@@ -63,6 +63,33 @@ object SequenceLauncher {
         SequenceRunner.start(sequence, launch.smsValue, launch.smsFields, launch.orderId)
         RulesStore.log(context, "${sequence.name} · a marcar ${sequence.dial}")
 
+        if (WakeActivity.ready(context)) {
+            dial(context, sequence)
+            return
+        }
+        // Ecrã apagado ou bloqueado: a caixa USSD não seria visível. A WakeActivity
+        // acorda-o e chama onWake, que marca.
+        RulesStore.log(context, "${sequence.name} · a desbloquear o ecrã")
+        runCatching { context.startActivity(WakeActivity.intent(context)) }.onFailure {
+            Log.w(TAG, "falhou ao acordar o ecrã", it)
+            dial(context, sequence)
+        }
+    }
+
+    /** Resposta da [WakeActivity]: desbloqueado marca, senão desiste da ordem. */
+    fun onWake(context: Context, unlocked: Boolean) {
+        val launch = last ?: return
+        if (unlocked) {
+            dial(context, launch.sequence)
+            return
+        }
+        SequenceRunner.stop()
+        RulesStore.log(context, "${launch.sequence.name} · ecrã com bloqueio seguro (PIN/padrão): não marcou")
+        // Nada foi submetido ao operador: repetir é seguro, como no indisponível.
+        launch.orderId?.let { OrderPoller.desistir(context, it, MOTIVO_INDISPONIVEL) }
+    }
+
+    private fun dial(context: Context, sequence: Sequence) {
         // Uri.fromParts trata o '#' dos códigos USSD, que numa Uri normal seria
         // lido como fragmento e truncaria o número.
         val intent = Intent(Intent.ACTION_CALL, Uri.fromParts("tel", sequence.dial, null))
