@@ -113,6 +113,10 @@ object SequenceRunner {
         return signature
     }
 
+    /** Há quanto tempo a última sequência acabou; 0 se ainda não acabou nenhuma. */
+    val msSinceEnd: Long
+        get() = if (endedAt == 0L) 0L else SystemClock.elapsedRealtime() - endedAt
+
     /**
      * Uma ordem acabou de correr e o SMS de confirmação ainda não chegou.
      *
@@ -136,7 +140,8 @@ object SequenceRunner {
         index = 0
         startedAt = SystemClock.elapsedRealtime()
         endedAt = 0L
-        closeUntil = 0L
+        // Sem passos (ex. o código já mostra o saldo), a caixa que aparece é logo o resultado.
+        closeUntil = if (steps.isEmpty()) startedAt + FECHO_MS else 0L
         lastAnswered = null
         failure = null
         this.smsValue = smsValue

@@ -111,6 +111,8 @@ object SequenceLauncher {
      * não se repete, e a ordem segue o caminho de sempre (SMS ou expira).
      */
     fun onFailure(context: Context, failure: SequenceRunner.Failure) {
+        // A consulta de saldo não se repete: a ordem à espera dela segue sem saldo.
+        if (SaldoCheck.onFailure(context)) return
         val launch = last ?: return
         val nome = launch.sequence.name
 

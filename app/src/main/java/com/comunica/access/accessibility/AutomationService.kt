@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.comunica.access.SaldoCheck
 import com.comunica.access.SequenceLauncher
 import com.comunica.access.api.OrderPoller
 import com.comunica.access.data.RulesStore
@@ -54,7 +55,8 @@ class AutomationService : AccessibilityService() {
                 SequenceRunner.closeResult(window)?.let { text ->
                     Log.d(TAG, "Resultado fechado: \"$text\"")
                     RulesStore.log(this, "${SequenceRunner.name} · resultado: \"${text.take(160)}\" · OK")
-                    confirmarPeloEcra(text)
+                    // A consulta de saldo também acaba numa caixa destas.
+                    if (!SaldoCheck.onTexto(this, text, caixaFinal = true)) confirmarPeloEcra(text)
                 }
             }
             return

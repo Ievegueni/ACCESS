@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import android.util.Log
+import com.comunica.access.SaldoCheck
 import com.comunica.access.SequenceLauncher
 import com.comunica.access.accessibility.SequenceRunner
 import com.comunica.access.data.RulesStore
@@ -40,7 +41,10 @@ class SmsTrigger : BroadcastReceiver() {
             // tarde, o que está em fila continua a dizer de onde veio na verdade.
             WebhookQueue.add(
                 context,
-                confirmation.toJson(WebhookConfig.numero(context), SequenceRunner.takeOrderId()),
+                confirmation.toJson(
+                    WebhookConfig.numero(context),
+                    SequenceRunner.takeOrderId() ?: SaldoCheck.takeOrderId(),
+                ),
             )
             RulesStore.log(
                 context,
@@ -49,6 +53,9 @@ class SmsTrigger : BroadcastReceiver() {
             WebhookSender.flush(context)
             return
         }
+
+        // Há operadores que respondem à consulta de saldo por SMS e não na caixa.
+        if (SaldoCheck.onTexto(context, body)) return
 
         val sequences = RulesStore.loadSequences(context)
         val sequence = sequences.firstOrNull { it.triggeredBy(body) }

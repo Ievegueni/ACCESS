@@ -2,6 +2,7 @@ package com.comunica.access.api
 
 import android.content.Context
 import android.util.Log
+import com.comunica.access.SaldoCheck
 import com.comunica.access.SequenceLauncher
 import com.comunica.access.accessibility.SequenceRunner
 import com.comunica.access.data.RulesStore
@@ -67,8 +68,9 @@ object OrderPoller {
                 continue
             }
 
+            SaldoCheck.tick(context)
             if (SequenceRunner.running || SequenceLauncher.aRepetir > 0 ||
-                SequenceRunner.awaitingConfirmation || SequenceRunner.closing
+                SequenceRunner.awaitingConfirmation || SequenceRunner.closing || SaldoCheck.ocupado
             ) {
                 // Não se vai buscar o que não se pode executar: a ordem ficaria
                 // marcada como entregue no servidor e expirava à espera. Uma
@@ -159,6 +161,8 @@ object OrderPoller {
         // Os nomes dos campos vão para o histórico, os valores não: o histórico
         // está à vista na app, tal como no caminho do SMS.
         RulesStore.log(context, "ordem $ref · ${sequencia.name} (${campos.keys.joinToString(", ")})")
+        // Transferência com valor: primeiro o saldo, para haver prova se o SMS não vier.
+        if (id != null && campos["valor"] != null && SaldoCheck.antes(context, sequencia, campos, id)) return
         SequenceLauncher.launch(context, sequencia, campos["sms"], campos, id)
     }
 
@@ -171,16 +175,34 @@ object OrderPoller {
      * mesma, só com o motivo menos útil. Uma fila em disco, como a do webhook,
      * se isto se perder na prática.
      */
-    fun desistir(context: Context, id: Int, motivo: String) {
+    fun desistir(context: Context, id: Int, motivo: String) = avisar(
+        context,
+        id,
+        "falha",
+        JSONObject().put("motivo", motivo),
+        motivo,
+    )
+
+    /**
+     * Manda ao painel o saldo antes e depois de uma ordem sem confirmação, para ele
+     * decidir se saiu (ver [com.comunica.access.SaldoCheck]). Os valores não vão
+     * para o histórico, que está à vista na app.
+     */
+    fun enviarSaldo(context: Context, id: Int, antes: String, depois: String) = avisar(
+        context,
+        id,
+        "saldo",
+        JSONObject().put("antes", antes).put("depois", depois),
+        "saldo",
+    )
+
+    private fun avisar(context: Context, id: Int, caminho: String, dados: JSONObject, rotulo: String) {
         val config = WebhookConfig.from(context) ?: return
-        val corpo = JSONObject()
-            .put("motivo", motivo)
-            .put("numero", WebhookConfig.numero(context))
-            .toString()
+        val corpo = dados.put("numero", WebhookConfig.numero(context)).toString()
         thread(isDaemon = true) {
             repeat(3) { tentativa ->
                 val codigo = runCatching {
-                    val connection = (URL("${config.base}/api/telemovel/ordens/$id/falha")
+                    val connection = (URL("${config.base}/api/telemovel/ordens/$id/$caminho")
                         .openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
                         connectTimeout = TIMEOUT_MS
@@ -199,7 +221,7 @@ object OrderPoller {
 
                 // 4xx não melhora com repetição, tal como no webhook.
                 if (codigo in 200..499) {
-                    RulesStore.log(context, "ordem $id · painel avisado ($motivo)")
+                    RulesStore.log(context, "ordem $id · painel avisado ($rotulo)")
                     return@thread
                 }
                 Log.w(TAG, "ordem $id: aviso ao painel falhou (${descricao(codigo)})")
