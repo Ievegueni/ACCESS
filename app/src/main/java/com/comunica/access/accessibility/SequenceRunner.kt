@@ -55,7 +55,12 @@ object SequenceRunner {
      * O erro do operador que acabou com a sequência, à espera de ser levado por
      * [takeFailure]. `beforeValue` diz se repetir é seguro (ver [UssdFailure]).
      */
-    data class Failure(val beforeValue: Boolean, val text: String)
+    data class Failure(
+        val beforeValue: Boolean,
+        val text: String,
+        /** Caixa "NULL" a seguir ao IBAN ([UssdFailure.recusaIban]): não se repete. */
+        val ibanRecusado: Boolean = false,
+    )
 
     private var failure: Failure? = null
 
@@ -224,7 +229,7 @@ object SequenceRunner {
         val precisaEscrever = Step.parse(steps[index]).answer.isNotEmpty()
         if (semCampo && (UssdFailure.matches(signature) || (confirm != null && precisaEscrever))) {
             confirm?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            failure = Failure(UssdFailure.beforeValue(steps, index), signature)
+            failure = Failure(UssdFailure.beforeValue(steps, index), signature, UssdFailure.recusaIban(steps, index, signature))
             Log.w(TAG, "erro do operador no passo ${index + 1}: \"$signature\"")
             endedAt = SystemClock.elapsedRealtime()
             steps = emptyList()

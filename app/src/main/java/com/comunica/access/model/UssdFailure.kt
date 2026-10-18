@@ -50,5 +50,21 @@ object UssdFailure {
         return if (valueAt < 0) answered == 0 else answered <= valueAt
     }
 
+    /**
+     * A caixa "NULL" logo a seguir ao IBAN: a Afrimoney recusa o destinatário (IBAN
+     * errado ou conta que não recebe). Nenhum IBAN que a deu saiu alguma vez, nem
+     * repetido (2026-10-18), por isso não se repete: vai logo `destinatario_invalido`.
+     * [answered] é quantos passos já foram respondidos; o último tem de ser o IBAN.
+     */
+    fun recusaIban(steps: List<String>, answered: Int, text: String): Boolean {
+        val anterior = steps.getOrNull(answered - 1) ?: return false
+        if (!anterior.contains("{iban}", ignoreCase = true)) return false
+        val palavras = text.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() && it !in BOTOES }
+        return palavras == listOf("null")
+    }
+
+    /** Os botões entram na assinatura da caixa ("NULL OK"); não contam como texto. */
+    private val BOTOES = setOf("ok", "cancelar", "cancel", "enviar", "send", "responder", "reply")
+
     private val ACENTOS = Regex("\\p{M}+")
 }

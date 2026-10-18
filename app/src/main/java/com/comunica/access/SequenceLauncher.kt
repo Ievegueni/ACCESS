@@ -121,6 +121,14 @@ object SequenceLauncher {
             return
         }
 
+        // IBAN recusado: repetir dava a mesma caixa e prendia o telemóvel.
+        if (failure.ibanRecusado) {
+            RulesStore.log(context, "$nome · IBAN recusado pelo operador (NULL): não se repete")
+            if (launch.orderId != null) SequenceRunner.orderId = null
+            launch.orderId?.let { OrderPoller.desistir(context, it, MOTIVO_DESTINATARIO) }
+            return
+        }
+
         if (launch.tentativa < REPETICOES) {
             launch.tentativa++
             aRepetir++
@@ -155,5 +163,6 @@ object SequenceLauncher {
     private const val REPETICOES = 3
     private const val ESPERA_MS = 30_000L
     private const val MOTIVO_INDISPONIVEL = "operador_indisponivel"
+    private const val MOTIVO_DESTINATARIO = "destinatario_invalido"
     private const val TAG = "AutomationService"
 }

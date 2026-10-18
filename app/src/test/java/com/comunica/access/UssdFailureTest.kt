@@ -39,4 +39,15 @@ class UssdFailureTest {
         assertTrue(UssdFailure.beforeValue(steps, 0))
         assertFalse(UssdFailure.beforeValue(steps, 1))
     }
+
+    @Test
+    fun `NULL logo a seguir ao IBAN e IBAN recusado`() {
+        val steps = listOf("1", "{iban}", "{valor}", "<PIN>")
+        assertTrue(UssdFailure.recusaIban(steps, 2, "NULL OK"))
+        assertTrue(UssdFailure.recusaIban(steps, 2, "null"))
+        assertFalse("NULL à marcação não é do IBAN", UssdFailure.recusaIban(steps, 0, "NULL OK"))
+        assertFalse("NULL depois do valor", UssdFailure.recusaIban(steps, 3, "NULL OK"))
+        assertFalse("indisponível continua a repetir", UssdFailure.recusaIban(steps, 2, "Serviço indisponível OK"))
+        assertFalse(UssdFailure.recusaIban(steps, 2, "NULL IBAN inválido OK"))
+    }
 }
