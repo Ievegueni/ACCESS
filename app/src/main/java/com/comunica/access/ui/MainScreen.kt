@@ -1,5 +1,9 @@
 package com.comunica.access.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +46,9 @@ import com.comunica.access.data.RulesStore
 import com.comunica.access.isServiceEnabled
 import com.comunica.access.model.AutomationRule
 import com.comunica.access.model.Sequence
+import com.comunica.access.model.importSequences
+import com.comunica.access.model.mergeSequences
+import com.comunica.access.model.toJson
 import com.comunica.access.webhook.WebhookConfig
 import com.comunica.access.webhook.WebhookQueue
 import com.comunica.access.webhook.WebhookSender
@@ -102,7 +109,39 @@ fun MainScreen(onOpenSettings: () -> Unit, onRun: (Sequence) -> Unit) {
         item { NewRuleForm(onAdd = { update(rules + it) }) }
 
         item { HorizontalDivider() }
-        item { Text("Sequências USSD", style = MaterialTheme.typography.titleMedium) }
+        item {
+            // Copiar/Colar: passar as sequências para outro telemóvel (ou guardá-las)
+            // sem as escrever à mão. O JSON leva os passos tal como estão, PIN incluído.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Sequências USSD", style = MaterialTheme.typography.titleMedium)
+                Row {
+                    TextButton(
+                        enabled = sequences.isNotEmpty(),
+                        onClick = {
+                            clipboard(context).setPrimaryClip(ClipData.newPlainText("Sequências USSD", sequences.toJson()))
+                            toast(context, "${sequences.size} sequência(s) copiadas")
+                        },
+                    ) { Text("Copiar") }
+                    TextButton(onClick = {
+                        val text = clipboard(context).primaryClip?.takeIf { it.itemCount > 0 }
+                            ?.getItemAt(0)?.coerceToText(context)?.toString()
+                        val imported = importSequences(text)
+                        if (imported == null) {
+                            toast(context, "O clipboard não tem sequências copiadas da app")
+                        } else {
+                            sequences = mergeSequences(sequences, imported)
+                            RulesStore.saveSequences(context, sequences)
+                            editing = null
+                            toast(context, "${imported.size} sequência(s) coladas")
+                        }
+                    }) { Text("Colar") }
+                }
+            }
+        }
 
         itemsIndexed(sequences) { index, sequence ->
             if (editing == index) {
@@ -168,6 +207,12 @@ fun MainScreen(onOpenSettings: () -> Unit, onRun: (Sequence) -> Unit) {
         }
     }
 }
+
+private fun clipboard(context: Context) =
+    context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+private fun toast(context: Context, message: String) =
+    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 
 /** Endpoint do painel e estado da fila de confirmações por entregar. */
 @Composable

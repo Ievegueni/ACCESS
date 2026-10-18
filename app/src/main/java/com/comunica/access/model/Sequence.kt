@@ -142,3 +142,24 @@ fun sequencesFromJson(json: String?): List<Sequence> {
         )
     }
 }
+
+/**
+ * Sequências coladas de outro telemóvel (o JSON de [toJson]). Ao contrário de
+ * [sequencesFromJson], não perdoa: texto que não seja uma lista de sequências
+ * válidas dá null, para um "Colar" com lixo no clipboard não apagar nada.
+ */
+fun importSequences(json: String?): List<Sequence>? {
+    if (json.isNullOrBlank()) return null
+    val trimmed = json.trim()
+    if (!trimmed.startsWith("[")) return null
+    val imported = runCatching { sequencesFromJson(trimmed) }.getOrNull() ?: return null
+    return imported.takeIf { it.isNotEmpty() && it.all(Sequence::isValid) }
+}
+
+/** Junta pelo nome: a importada substitui a que tem o mesmo nome, as outras ficam. */
+fun mergeSequences(current: List<Sequence>, imported: List<Sequence>): List<Sequence> {
+    val byName = imported.associateBy { it.name.trim().lowercase() }
+    val kept = current.map { byName[it.name.trim().lowercase()] ?: it }
+    val keptNames = kept.map { it.name.trim().lowercase() }.toSet()
+    return kept + imported.filter { it.name.trim().lowercase() !in keptNames }
+}

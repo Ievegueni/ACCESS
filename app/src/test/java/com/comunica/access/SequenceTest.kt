@@ -2,11 +2,14 @@ package com.comunica.access
 
 import com.comunica.access.model.Sequence
 import com.comunica.access.model.Step
+import com.comunica.access.model.importSequences
+import com.comunica.access.model.mergeSequences
 import com.comunica.access.model.sequencesFromJson
 import com.comunica.access.model.smsFields
 import com.comunica.access.model.toJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,5 +123,25 @@ class SequenceTest {
         assertTrue(Sequence("Saldo", "*123#", emptyList()).isValid)
         assertFalse(Sequence("", "*123#", listOf("1")).isValid)
         assertFalse(Sequence("Saldo", "  ", listOf("1")).isValid)
+    }
+
+    @Test
+    fun `colar aceita o json exportado e recusa lixo`() {
+        val exportado = listOf(Sequence("kwik", "*777#", listOf("1", "{iban}", "{valor}", "<PIN>"))).toJson()
+        assertEquals("kwik", importSequences(exportado)!!.single().name)
+        assertNull(importSequences(null))
+        assertNull(importSequences("ola"))
+        assertNull(importSequences("[]"))
+        assertNull(importSequences("[1, 2]"))
+        assertNull(importSequences("""[{"name": "", "dial": "*123#"}]"""))
+    }
+
+    @Test
+    fun `colar substitui pelo nome e mantem as outras`() {
+        val atuais = listOf(Sequence("kwik", "*777#", listOf("1")), Sequence("Outra", "*1#", emptyList()))
+        val coladas = listOf(Sequence("KWIK", "*777#", listOf("2")), Sequence("saldo", "*123#", listOf("1")))
+        val juntas = mergeSequences(atuais, coladas)
+        assertEquals(listOf("KWIK", "Outra", "saldo"), juntas.map { it.name })
+        assertEquals(listOf("2"), juntas[0].steps)
     }
 }
