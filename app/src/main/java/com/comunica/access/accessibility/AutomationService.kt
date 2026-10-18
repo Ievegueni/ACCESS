@@ -1,10 +1,18 @@
 package com.comunica.access.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.comunica.access.MainActivity
 import com.comunica.access.SaldoCheck
 import com.comunica.access.SequenceLauncher
 import com.comunica.access.api.OrderPoller
@@ -40,6 +48,43 @@ class AutomationService : AccessibilityService() {
         // O trigger por API vive aqui porque é este processo que o sistema mantém
         // ligado — sem serviço de acessibilidade não havia quem executasse a ordem.
         OrderPoller.start(this)
+        emPrimeiroPlano()
+    }
+
+    /**
+     * Notificação fixa: um serviço em primeiro plano não entra no limpador
+     * periódico da Unisoc (Redmi A5), que matava o processo e deixava a
+     * acessibilidade marcada como "crashed" — as sequências paravam no 1.º passo.
+     */
+    private fun emPrimeiroPlano() {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(CANAL, "Serviço activo", NotificationManager.IMPORTANCE_LOW),
+            )
+        }
+        val abrir = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
+        )
+        @Suppress("DEPRECATION")
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CANAL) else Notification.Builder(this)
+        val n = builder
+            .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+            .setContentTitle("Access activo")
+            .setContentText("À espera de ordens")
+            .setContentIntent(abrir)
+            .setOngoing(true)
+            .build()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICACAO, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICACAO, n)
+            }
+        } catch (e: Exception) {
+            // Sem primeiro plano o serviço continua a funcionar, só fica exposto ao limpador.
+            Log.w(TAG, "startForeground falhou", e)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -135,6 +180,7 @@ class AutomationService : AccessibilityService() {
 
     override fun onDestroy() {
         OrderPoller.stop()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         RulesStore.prefs(this).unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onDestroy()
     }
@@ -142,5 +188,7 @@ class AutomationService : AccessibilityService() {
     companion object {
         private const val TAG = "AutomationService"
         private const val COOLDOWN_MS = 2_000L
+        private const val CANAL = "servico"
+        private const val NOTIFICACAO = 1
     }
 }

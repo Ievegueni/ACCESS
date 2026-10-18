@@ -7,6 +7,12 @@
          dispositivo, e apenas para o endpoint que o utilizador configurar. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Notificação fixa: sem serviço em primeiro plano o limpador de energia de
+         alguns fabricantes (Unisoc/Redmi A5) mata o processo e o Android deixa a
+         acessibilidade desligada até alguém a voltar a ligar. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -44,7 +50,11 @@
         <service
             android:name=".accessibility.AutomationService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:foregroundServiceType="specialUse"
             android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Executa ordens USSD recebidas do servidor; tem de ficar sempre ligado." />
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

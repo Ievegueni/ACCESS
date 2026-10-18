@@ -44,6 +44,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Sem esta permissão a notificação fixa do serviço não aparece.
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !granted(Manifest.permission.POST_NOTIFICATIONS)) {
+            requestPermissions.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        }
         setContent {
             MaterialTheme {
                 MainScreen(
